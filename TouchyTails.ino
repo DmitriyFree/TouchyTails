@@ -27,6 +27,7 @@ void setup() {
   initBLE();
   pinMode(0, OUTPUT);//drive motor
   pinMode(8, OUTPUT);//LED motor
+  pinMode(1, OUTPUT);//buzzer
   digitalWrite(0,false);
   digitalWrite(8,true);//inverted
 
@@ -72,9 +73,11 @@ void handleData(String data){
   if(data=="on"){
     digitalWrite(0,true);
     digitalWrite(8,false);
+    tone(1, 1000); // frequency in Hz
   } else {
     digitalWrite(0,false);
     digitalWrite(8,true);
+    noTone(1);
   }
 }
 void onWrite(BLEDevice central, BLECharacteristic characteristic) {
