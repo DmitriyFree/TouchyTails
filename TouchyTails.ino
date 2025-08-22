@@ -3,8 +3,8 @@
 
 // ==== CONFIG ====
 #define DEVICE_NAME         "TouchyTails"
-#define SERVICE_UUID        "ab00"
-#define CHARACTERISTIC_UUID "ab01"
+#define SERVICE_UUID        "0000ab00-0000-1000-8000-00805f9b34fb"
+#define CHARACTERISTIC_UUID "0000ab01-0000-1000-8000-00805f9b34fb"
 #define CHARACTERISTIC_SIZE 1000
 
 Preferences preferences;
