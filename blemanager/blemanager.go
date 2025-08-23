@@ -66,6 +66,7 @@ func (b *BLEManager) Connect(deviceName string, timeout time.Duration) {
 	}
 
 	// Connect to device
+	fmt.Println("Trying to connect")
 	device, err := adapter.Connect(deviceAddress, bluetooth.ConnectionParams{})
 	if err != nil {
 		log.Fatal("failed to connect:", err)

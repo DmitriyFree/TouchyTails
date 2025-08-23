@@ -38,7 +38,14 @@ func (o *OSCManager) Run() {
 
 		if len(msg.Arguments) > 0 {
 			if val, ok := msg.Arguments[0].(float32); ok {
-				o.TouchChan <- val
+				select {
+				case o.TouchChan <- val:
+					// sent successfully
+				default:
+					// channel full: remove old value then insert new one
+					<-o.TouchChan
+					o.TouchChan <- val
+				}
 			}
 		}
 	})

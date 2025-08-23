@@ -18,6 +18,12 @@ BLEStringCharacteristic Characteristic(
 );
 BLEDescriptor CharacteristicDescriptor("2901", "Data");
 
+// ==== STATE ====
+float currentValue = 0.0;      // active (fading) value
+float targetValue = 0.0;       // last received value
+unsigned long lastUpdate = 0;  // millis when last update arrived
+const unsigned long fadeTime = 500; // ms to fade to zero
+
 // ==== SETUP ====
 
 void setup() {
@@ -25,11 +31,11 @@ void setup() {
   preferences.begin("data", false);
 
   initBLE();
-  pinMode(0, OUTPUT);//drive motor
-  pinMode(8, OUTPUT);//LED motor
-  pinMode(1, OUTPUT);//buzzer
-  digitalWrite(0,false);
-  digitalWrite(8,true);//inverted
+  pinMode(0, OUTPUT); // motor
+  pinMode(8, OUTPUT); // LED
+  pinMode(1, OUTPUT); // buzzer
+  digitalWrite(0, false);
+  digitalWrite(8, true); // inverted idle
 
   // Print useful info
   Serial.print(F("My address: "));
@@ -69,17 +75,16 @@ void initBLE() {
 }
 
 // ==== BLE Event ====
-void handleData(String data){
-  if(data=="on"){
-    digitalWrite(0,true);
-    digitalWrite(8,false);
-    tone(1, 1000); // frequency in Hz
-  } else {
-    digitalWrite(0,false);
-    digitalWrite(8,true);
-    noTone(1);
-  }
+void handleData(String data) {
+  float value = data.toFloat();   
+  value = constrain(value, 0.0, 1.0); 
+  targetValue = value;  
+  currentValue = value;  // snap immediately to new value
+  lastUpdate = millis();
+
+  applyOutput(currentValue);
 }
+
 void onWrite(BLEDevice central, BLECharacteristic characteristic) {
   int len = characteristic.valueLength();
   const uint8_t* rawData = characteristic.value();
@@ -90,15 +95,39 @@ void onWrite(BLEDevice central, BLECharacteristic characteristic) {
   }
 
   Serial.println("From BLE: " + received);
-  Serial1.println(received);
 
   handleData(received);
 }
 
-// ==== MAIN LOOP ====
+// ==== OUTPUT ====
+void applyOutput(float value) {
+  // PWM duty cycle 0–255
+  int duty = (int)(value * 255.0);
+  analogWrite(0, duty);
+  analogWrite(8, 255-duty);
 
-void loop() {
-  BLE.poll();
+  // Frequency 0–1000 Hz
+  int freq = (int)(value * 1000.0);
+  if (freq > 0) {
+    tone(1, freq);
+  } else {
+    noTone(1);
+  }
 }
 
+// ==== MAIN LOOP ====
+void loop() {
+  BLE.poll();
 
+  unsigned long now = millis();
+  unsigned long elapsed = now - lastUpdate;
+
+  if (elapsed < fadeTime) {
+    // Fade linearly from targetValue to 0 over fadeTime
+    float factor = 1.0 - (float)elapsed / (float)fadeTime;
+    //currentValue = targetValue * factor;
+  } else {
+    currentValue = 0.0;
+    applyOutput(currentValue);
+  }
+}
