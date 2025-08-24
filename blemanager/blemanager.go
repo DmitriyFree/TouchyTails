@@ -34,7 +34,7 @@ func New() *BLEManager {
 }
 
 // Connect scans and connects to the named device
-func (b *BLEManager) Connect(deviceName string, timeout time.Duration) {
+func (b *BLEManager) Connect(deviceName string, timeout time.Duration) error {
 	fmt.Println("Scanning for BLE devices...")
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -61,8 +61,9 @@ func (b *BLEManager) Connect(deviceName string, timeout time.Duration) {
 
 	select {
 	case <-found:
+		// device found, continue
 	case <-ctx.Done():
-		log.Fatal("Scan timeout, device not found")
+		return fmt.Errorf("scan timeout: device not found")
 	}
 
 	// Connect to device
@@ -111,6 +112,7 @@ func (b *BLEManager) Connect(deviceName string, timeout time.Duration) {
 	b.mu.Unlock()
 
 	fmt.Println("Connected and ready to send data to", deviceName)
+	return nil // <- important! must return nil on success
 }
 
 // Send writes data to the device safely
@@ -126,6 +128,7 @@ func (b *BLEManager) Send(data string) {
 	_, err := b.char.Write([]byte(data))
 	if err != nil {
 		log.Println("Failed to send data:", err)
+		b.ready = false // mark as disconnected
 	} else {
 		fmt.Println("Sent:", data)
 	}
@@ -141,4 +144,9 @@ func (b *BLEManager) Disconnect() {
 		b.ready = false
 		fmt.Println("Disconnected from BLE device")
 	}
+}
+func (b *BLEManager) Ready() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.ready
 }
