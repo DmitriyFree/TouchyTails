@@ -33,8 +33,20 @@ func New() *BLEManager {
 	return &BLEManager{}
 }
 
-// Connect scans and connects to the named device
-func (b *BLEManager) Connect(deviceName string, timeout time.Duration) error {
+// In your BLE manager:
+/*func (b *BLEManager) ScanDevice(deviceName string, timeout time.Duration, onFound func(addr string)) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	return adapter.Scan(func(adapter *bluetooth.Adapter, result bluetooth.ScanResult) {
+		if result.LocalName() == deviceName {
+			adapter.StopScan()
+			onFound(result.Address.String()) // call the callback with MAC string
+		}
+	})
+}*/
+
+func (b *BLEManager) ScanDevice(deviceName string, timeout time.Duration) (bluetooth.Address, error) {
 	fmt.Println("Scanning for BLE devices...")
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -48,34 +60,37 @@ func (b *BLEManager) Connect(deviceName string, timeout time.Duration) error {
 
 		if result.LocalName() == deviceName {
 			once.Do(func() {
-				fmt.Println("Found", deviceName, "! Stopping scan...")
 				deviceAddress = result.Address
+				fmt.Println("Found", deviceName, "at", deviceAddress, "! Stopping scan...")
 				adapter.StopScan()
 				close(found)
 			})
 		}
 	})
 	if err != nil {
-		log.Fatal("failed to start scan:", err)
+		return bluetooth.Address{}, fmt.Errorf("failed to start scan: %w", err)
 	}
 
 	select {
 	case <-found:
-		// device found, continue
+		return deviceAddress, nil
 	case <-ctx.Done():
-		return fmt.Errorf("scan timeout: device not found")
+		return bluetooth.Address{}, fmt.Errorf("scan timeout: device not found")
 	}
+}
 
-	// Connect to device
-	fmt.Println("Trying to connect")
-	device, err := adapter.Connect(deviceAddress, bluetooth.ConnectionParams{})
+// Connect scans and connects to the named device
+// ConnectDevice connects to a specific device by its Bluetooth address.
+func (b *BLEManager) ConnectDevice(addr bluetooth.Address) error {
+	fmt.Println("Connecting to device at", addr)
+	device, err := adapter.Connect(addr, bluetooth.ConnectionParams{})
 	if err != nil {
-		log.Fatal("failed to connect:", err)
+		return fmt.Errorf("failed to connect: %w", err)
 	}
 
 	services, err := device.DiscoverServices(nil)
 	if err != nil {
-		log.Fatal("failed to discover services:", err)
+		return fmt.Errorf("failed to discover services: %w", err)
 	}
 
 	var targetService *bluetooth.DeviceService
@@ -86,12 +101,12 @@ func (b *BLEManager) Connect(deviceName string, timeout time.Duration) error {
 		}
 	}
 	if targetService == nil {
-		log.Fatal("service not found")
+		return fmt.Errorf("service not found")
 	}
 
 	chars, err := targetService.DiscoverCharacteristics(nil)
 	if err != nil {
-		log.Fatal("failed to discover characteristics:", err)
+		return fmt.Errorf("failed to discover characteristics: %w", err)
 	}
 
 	var targetChar *bluetooth.DeviceCharacteristic
@@ -102,7 +117,7 @@ func (b *BLEManager) Connect(deviceName string, timeout time.Duration) error {
 		}
 	}
 	if targetChar == nil {
-		log.Fatal("characteristic not found")
+		return fmt.Errorf("characteristic not found")
 	}
 
 	b.mu.Lock()
@@ -111,8 +126,8 @@ func (b *BLEManager) Connect(deviceName string, timeout time.Duration) error {
 	b.ready = true
 	b.mu.Unlock()
 
-	fmt.Println("Connected and ready to send data to", deviceName)
-	return nil // <- important! must return nil on success
+	fmt.Println("Connected and ready to send data to", addr)
+	return nil
 }
 
 // Send writes data to the device safely
