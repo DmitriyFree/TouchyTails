@@ -87,8 +87,3 @@ func bleConnectionManager() {
 		time.Sleep(5 * time.Second)
 	}
 }
-
-// helper: check if BLEManager is ready
-func isReady(b *blemanager.BLEManager) bool {
-	return b.Ready()
-}
