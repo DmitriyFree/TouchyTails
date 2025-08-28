@@ -77,12 +77,16 @@ func RunBLEManagers(console *Console) {
 
 				console.append(fmt.Sprintf("%s connected!", dev.Name))
 				d.blePtr.Send("1") // welcome beep
+				d.Online = true
+				applyStatus(d.Status, "Online")
 
 				// Heartbeat loop
 				for {
 					if !dev.Enabled || !ble.Ready() {
 						console.append(fmt.Sprintf("%s disconnected, reconnecting...", dev.Name))
 						d.blePtr.Disconnect()
+						d.Online = false
+						applyStatus(d.Status, "Offline")
 						break // retry connect
 					}
 
