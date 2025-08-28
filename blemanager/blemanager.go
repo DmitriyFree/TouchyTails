@@ -46,7 +46,7 @@ func New() *BLEManager {
 	})
 }*/
 
-func (b *BLEManager) ScanDevice(deviceName string, timeout time.Duration) (bluetooth.Address, error) {
+func (b *BLEManager) ScanDevice(deviceName string, timeout time.Duration, onFound func(addr string)) (bluetooth.Address, error) {
 	fmt.Println("Scanning for BLE devices...")
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -73,6 +73,7 @@ func (b *BLEManager) ScanDevice(deviceName string, timeout time.Duration) (bluet
 
 	select {
 	case <-found:
+		onFound(deviceAddress.String())
 		return deviceAddress, nil
 	case <-ctx.Done():
 		return bluetooth.Address{}, fmt.Errorf("scan timeout: device not found")
