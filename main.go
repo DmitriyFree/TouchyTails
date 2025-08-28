@@ -16,6 +16,9 @@ import (
 
 //var blePtr atomic.Pointer[blemanager.BLEManager]
 
+var guiChan = make(chan func(), 50)               // buffered
+var oscChan = make(chan oscmanager.OSCMessage, 1) // OSC values
+
 type Device struct {
 	ID      bluetooth.Address
 	Name    string
@@ -24,7 +27,6 @@ type Device struct {
 	Status  *canvas.Text
 	Event   string
 	blePtr  *blemanager.BLEManager
-	Conn    *bluetooth.Device // <--- add this
 }
 
 var devices = []*Device{}
@@ -66,27 +68,38 @@ func RunBLEManagers(console *Console) {
 					time.Sleep(2 * time.Second)
 					continue
 				}
-
-				console.append(fmt.Sprintf("Scanning/connecting to %s (%s)...", dev.Name, dev.ID))
+				guiChan <- func() {
+					console.append(fmt.Sprintf("Scanning/connecting to %s (%s)...", dev.Name, dev.ID))
+				}
 				err := ble.ConnectDevice(dev.ID) // connect by stored MAC
 				if err != nil {
-					console.append(fmt.Sprintf("Failed to connect %s: %v", dev.Name, err))
+					guiChan <- func() {
+						console.append(fmt.Sprintf("Failed to connect %s: %v", dev.Name, err))
+					}
 					time.Sleep(5 * time.Second)
 					continue
 				}
-
-				console.append(fmt.Sprintf("%s connected!", dev.Name))
+				guiChan <- func() {
+					console.append(fmt.Sprintf("%s connected!", dev.Name))
+				}
 				d.blePtr.Send("1") // welcome beep
 				d.Online = true
-				applyStatus(d.Status, "Online")
+				guiChan <- func() {
+					console.append("Beep sent to " + d.ID.String())
+					applyStatus(d.Status, "Online")
+				}
 
 				// Heartbeat loop
 				for {
 					if !dev.Enabled || !ble.Ready() {
-						console.append(fmt.Sprintf("%s disconnected, reconnecting...", dev.Name))
+						guiChan <- func() {
+							console.append(fmt.Sprintf("%s disconnected, reconnecting...", dev.Name))
+						}
 						d.blePtr.Disconnect()
 						d.Online = false
-						applyStatus(d.Status, "Offline")
+						guiChan <- func() {
+							applyStatus(d.Status, "Offline")
+						}
 						break // retry connect
 					}
 
@@ -115,14 +128,20 @@ func main() {
 
 	// --- Load devices ---
 	devices = LoadDevices()
-	console.append(fmt.Sprintf("Loaded %d devices", len(devices)))
+	guiChan <- func() {
+		console.append(fmt.Sprintf("Loaded %d devices", len(devices)))
+	}
 	refreshDevices(deviceListVBox, console)
 
 	discoverBtn := widget.NewButton("Discover Devices", func() {
-		console.append("Discovery triggered")
+		guiChan <- func() {
+			console.append("Discovery triggered")
+		}
 		var ble = blemanager.New()
 		ble.ScanDevice("TouchyTails", 10*time.Second, func(addrStr string) {
-			console.append("Found device: " + addrStr)
+			guiChan <- func() {
+				console.append("Found device: " + addrStr)
+			}
 
 			var addr bluetooth.Address
 			addr.Set(addrStr) // no error returned
@@ -154,37 +173,56 @@ func main() {
 	w.SetContent(mainUI)
 	w.Resize(fyne.NewSize(800, 600))
 
-	// --- Channels for tail touch processing ---
-	touchChan := make(chan float32, 10) // OSC tail touch values
-	guiChan := make(chan string, 20)    // messages for GUI console
-
-	// --- Safe GUI updater ---
-	go func() {
-		for msg := range guiChan {
-			console.append(msg)
-		}
-	}()
-
 	// --- Start BLE manager ---
 	go RunBLEManagers(console)
 
 	// --- Start OSC manager ---
-	oscMgr := oscmanager.New("127.0.0.1:9001", touchChan)
+	oscMgr := oscmanager.New("127.0.0.1:9001", oscChan)
 	go oscMgr.Run()
 
 	// --- Process tail touches ---
-	/*go func() {
-		for val := range touchChan {
-			if val > 0 {
-				msg := fmt.Sprintf("%.2f", val)
-				ble := blePtr.Load()
-				if ble != nil {
-					ble.Send(msg)
+	go func() {
+		for msg := range oscChan {
+			// Only process positive values
+			if msg.Value <= 0 {
+				continue
+			}
+
+			valueStr := fmt.Sprintf("%.2f", msg.Value)
+
+			for _, dev := range devices {
+				// Skip disabled or offline devices
+				if !dev.Enabled || !dev.Online {
+					continue
 				}
-				guiChan <- "Tail touched: " + msg
+
+				// Check if this device listens to this OSC event
+				if dev.Event != msg.Name {
+					continue
+				}
+
+				// Send value via BLE if available
+				if dev.blePtr != nil {
+					dev.blePtr.Send(valueStr)
+				}
+
+				// Update console safely on GUI thread
+				guiChan <- func(d *Device, val string) func() {
+					return func() {
+						console.append(fmt.Sprintf("Tail touched: %s -> %s", d.Name, val))
+					}
+				}(dev, valueStr) // pass dev and valueStr to closure to avoid closure capture issues
 			}
 		}
-	}()*/
+	}()
+
+	// --- GUI update loop ---
+	go func() {
+		for job := range guiChan {
+			// Run each GUI update safely on Fyne main thread
+			job()
+		}
+	}()
 
 	// --- Run GUI ---
 	w.ShowAndRun()

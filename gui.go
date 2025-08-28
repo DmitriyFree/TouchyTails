@@ -34,7 +34,9 @@ func applyStatus(label *canvas.Text, text string) {
 	}
 	label.Text = text
 	label.Color = col
-	label.Refresh()
+	fyne.DoAndWait(func() {
+		label.Refresh()
+	})
 }
 
 // --- Console handling ---
@@ -62,7 +64,9 @@ func (c *Console) append(line string) {
 	if len(lines) > c.limit {
 		lines = lines[len(lines)-c.limit:]
 	}
-	c.widget.SetText(strings.Join(lines, "\n"))
+	fyne.DoAndWait(func() {
+		c.widget.SetText(strings.Join(lines, "\n"))
+	})
 	c.widget.CursorRow = len(lines)
 }
 
@@ -79,21 +83,32 @@ func buildDeviceUI(d *Device, console *Console, refreshDevices func()) *fyne.Con
 	// Handlers
 	onBeep := func() {
 		d.blePtr.Send("1")
-		console.append("Beep sent to " + d.ID.String())
+		guiChan <- func() {
+			console.append("Beep sent to " + d.ID.String())
+		}
 	}
 
 	onToggleEnabled := func(enabled bool) {
 		d.Enabled = enabled
 		switch {
 		case !d.Enabled:
-			applyStatus(d.Status, "Disabled")
+			guiChan <- func() {
+				applyStatus(d.Status, "Disabled")
+			}
 		case d.Online:
-			applyStatus(d.Status, "Online")
+			guiChan <- func() {
+				applyStatus(d.Status, "Online")
+			}
 		default:
-			applyStatus(d.Status, "Pending")
+			guiChan <- func() {
+				applyStatus(d.Status, "Pending")
+			}
 		}
 		SaveDevices(devices)
-		console.append(d.Status.Text + " for " + d.ID.String())
+		guiChan <- func() {
+			console.append(d.Status.Text + " for " + d.ID.String())
+		}
+
 	}
 
 	onRemove := func() {
@@ -111,13 +126,17 @@ func buildDeviceUI(d *Device, console *Console, refreshDevices func()) *fyne.Con
 	onNameChanged := func(newName string) {
 		d.Name = newName
 		SaveDevices(devices)
-		console.append("Name updated for " + d.ID.String())
+		guiChan <- func() {
+			console.append("Name updated for " + d.ID.String())
+		}
 	}
 
 	onEventChanged := func(newEvent string) {
 		d.Event = newEvent
 		SaveDevices(devices)
-		console.append("Event updated for " + d.ID.String())
+		guiChan <- func() {
+			console.append("Event updated for " + d.ID.String())
+		}
 	}
 
 	// Widgets

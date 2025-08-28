@@ -33,19 +33,6 @@ func New() *BLEManager {
 	return &BLEManager{}
 }
 
-// In your BLE manager:
-/*func (b *BLEManager) ScanDevice(deviceName string, timeout time.Duration, onFound func(addr string)) error {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	return adapter.Scan(func(adapter *bluetooth.Adapter, result bluetooth.ScanResult) {
-		if result.LocalName() == deviceName {
-			adapter.StopScan()
-			onFound(result.Address.String()) // call the callback with MAC string
-		}
-	})
-}*/
-
 func (b *BLEManager) ScanDevice(deviceName string, timeout time.Duration, onFound func(addr string)) (bluetooth.Address, error) {
 	fmt.Println("Scanning for BLE devices...")
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -131,7 +118,6 @@ func (b *BLEManager) ConnectDevice(addr bluetooth.Address) error {
 	return nil
 }
 
-// Send writes data to the device safely
 func (b *BLEManager) Send(data string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -141,12 +127,25 @@ func (b *BLEManager) Send(data string) {
 		return
 	}
 
-	_, err := b.char.Write([]byte(data))
-	if err != nil {
-		log.Println("Failed to send data:", err)
-		b.ready = false // mark as disconnected
-	} else {
-		fmt.Println("Sent:", data)
+	done := make(chan error, 1)
+
+	// Start write in a separate goroutine
+	go func() {
+		_, err := b.char.Write([]byte(data))
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			log.Println("Failed to send data:", err)
+			b.ready = false
+		} else {
+			fmt.Println("Sent:", data)
+		}
+	case <-time.After(1 * time.Second):
+		log.Println("Send timeout:", data)
+		b.ready = false
 	}
 }
 

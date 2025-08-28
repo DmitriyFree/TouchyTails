@@ -65,7 +65,6 @@ func LoadDevices() []*Device {
 			Status:  newStatus("Pending"),
 			Online:  false,
 			blePtr:  nil,
-			Conn:    nil,
 		}
 	}
 
