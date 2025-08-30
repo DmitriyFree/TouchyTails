@@ -70,9 +70,13 @@ func (b *BLEManager) ScanDevice(
 
 // Connect scans and connects to the named device
 // ConnectDevice connects to a specific device by its Bluetooth address.
-func (b *BLEManager) ConnectDevice(addr bluetooth.Address) error {
+func (b *BLEManager) ConnectDevice(addr string) error {
 	fmt.Println("Connecting to device at", addr)
-	device, err := adapter.Connect(addr, bluetooth.ConnectionParams{})
+
+	var address bluetooth.Address
+	address.Set(addr)
+
+	device, err := adapter.Connect(address, bluetooth.ConnectionParams{})
 	if err != nil {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
@@ -161,7 +165,6 @@ func (b *BLEManager) Disconnect() {
 	if b.ready {
 		b.device.Disconnect()
 		b.ready = false
-		fmt.Println("Disconnected from BLE device")
 	}
 }
 func (b *BLEManager) Ready() bool {

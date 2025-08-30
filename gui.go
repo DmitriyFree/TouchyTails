@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"math/rand/v2"
 	"strings"
+	"touchytails/devicestore"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -30,6 +31,9 @@ func newStatus(text string) *canvas.Text {
 }
 
 func applyStatus(label *canvas.Text, text string) {
+	if label == nil {
+		return
+	}
 	col, ok := statusColors[text]
 	if !ok {
 		col = statusColors["Pending"]
@@ -73,91 +77,85 @@ func (c *Console) append(line string) {
 }
 
 // --- UI building ---
-func buildDeviceUI(d *Device, console *Console, refreshDevices func()) *fyne.Container {
-	// Labels & Entries
-	idLabel := canvas.NewText(d.ID.String(), color.White)
+func buildDeviceUI(d *devicestore.Device, console *Console, store *devicestore.DeviceStore, refreshDevices func()) *fyne.Container {
+	// --- Labels & Entries ---
+	idLabel := canvas.NewText(d.ID, color.White)
 	idLabel.TextSize = 6
-	idLabel.Resize(fyne.NewSize(800, 20))
+	idLabel.Alignment = fyne.TextAlignCenter
+	idLabel.Resize(fyne.NewSize(50, 20))
+
 	nameEntry := widget.NewEntry()
 	nameEntry.SetText(d.Name)
+
 	eventEntry := widget.NewEntry()
 	eventEntry.SetText(d.Event)
-	statusLabel := d.Status
-	statusLabel.Alignment = fyne.TextAlignCenter
 
-	// Handlers
+	// Ensure runtime status
+	if d.Status == nil {
+		d.Status = canvas.NewText("Pending", color.White)
+		d.Status.Alignment = fyne.TextAlignCenter
+	}
+	statusLabel := d.Status
+
+	// --- Handlers ---
 	onBeep := func() {
-		//d.blePtr.Send("1") // simple beep
-		// random beep intensity for fun
-		//
-		if !d.Online {
+		if d.BLEPtr == nil || !d.Online {
 			guiChan <- func() {
-				console.append("Device offline, cannot beep: " + d.ID.String())
+				console.append("Device offline, cannot beep: " + d.ID)
 			}
 			return
 		}
-		val := 0.4 + rand.Float64()*0.6         // random float in [0.4, 1.0]
-		d.blePtr.Send(fmt.Sprintf("%.2f", val)) // format with 2 decimals
+
+		val := 0.4 + rand.Float64()*0.6 // random float in [0.4, 1.0]
+		d.BLEPtr.Send(fmt.Sprintf("%.2f", val))
 		guiChan <- func() {
-			console.append("Beep: " + fmt.Sprintf("%.2f", val) + " for " + d.ID.String())
+			console.append(fmt.Sprintf("Beep: %.2f for %s", val, d.ID))
 		}
 	}
 
 	onToggleEnabled := func(enabled bool) {
 		d.Enabled = enabled
-		switch {
-		case !d.Enabled:
-			guiChan <- func() {
-				applyStatus(d.Status, "Disabled")
+		if !d.Enabled {
+			guiChan <- func() { applyStatus(d.Status, "Disabled") }
+			if d.BLEPtr != nil {
+				d.BLEPtr.Disconnect()
+				d.BLEPtr = nil
 			}
-		case d.Online:
-			guiChan <- func() {
-				applyStatus(d.Status, "Online")
-			}
-		default:
-			guiChan <- func() {
-				applyStatus(d.Status, "Pending")
-			}
-		}
-		SaveDevices(devices)
-		guiChan <- func() {
-			console.append(d.Status.Text + " for " + d.ID.String())
+		} else if d.Online {
+			guiChan <- func() { applyStatus(d.Status, "Online") }
+		} else {
+			guiChan <- func() { applyStatus(d.Status, "Pending") }
 		}
 
+		store.Save()
+		guiChan <- func() {
+			console.append(d.Status.Text + " for " + d.ID)
+		}
 	}
 
 	onRemove := func() {
 		d.Enabled = false
-		d.blePtr.Disconnect()
-		d.blePtr = nil
-		newDevices := []*Device{}
-		for _, dev := range devices {
-			if dev.ID != d.ID {
-				newDevices = append(newDevices, dev)
-			}
+		if d.BLEPtr != nil {
+			d.BLEPtr.Disconnect()
+			d.BLEPtr = nil
 		}
-		devices = newDevices
-		SaveDevices(devices)
+		store.Remove(d.ID)
 		refreshDevices()
 	}
 
 	onNameChanged := func(newName string) {
 		d.Name = newName
-		SaveDevices(devices)
-		guiChan <- func() {
-			console.append("Name updated for " + d.ID.String())
-		}
+		store.Save()
+		guiChan <- func() { console.append("Name updated for " + d.ID) }
 	}
 
 	onEventChanged := func(newEvent string) {
 		d.Event = newEvent
-		SaveDevices(devices)
-		guiChan <- func() {
-			console.append("Event updated for " + d.ID.String())
-		}
+		store.Save()
+		guiChan <- func() { console.append("Event updated for " + d.ID) }
 	}
 
-	// Widgets
+	// --- Widgets ---
 	beepBtn := widget.NewButton("Beep", onBeep)
 	enabledCheck := widget.NewCheck("Enabled", onToggleEnabled)
 	enabledCheck.SetChecked(d.Enabled)
@@ -165,7 +163,7 @@ func buildDeviceUI(d *Device, console *Console, refreshDevices func()) *fyne.Con
 	eventEntry.OnChanged = onEventChanged
 	removeBtn := widget.NewButton("Remove", onRemove)
 
-	// Layout
+	// --- Layout ---
 	row := container.NewGridWithColumns(7,
 		idLabel, nameEntry, statusLabel, beepBtn, enabledCheck, eventEntry, removeBtn,
 	)
@@ -173,7 +171,7 @@ func buildDeviceUI(d *Device, console *Console, refreshDevices func()) *fyne.Con
 	return container.NewBorder(nil, nil, nil, nil, row)
 }
 
-func refreshDevices(deviceList *fyne.Container, console *Console) {
+func refreshDevices(deviceList *fyne.Container, console *Console, store *devicestore.DeviceStore) {
 	deviceList.Objects = nil
 
 	// Header row
@@ -189,9 +187,16 @@ func refreshDevices(deviceList *fyne.Container, console *Console) {
 	deviceList.Add(header)
 
 	// Device rows
-	for _, d := range devices {
-		deviceList.Add(buildDeviceUI(d, console, func() { refreshDevices(deviceList, console) }))
+	for _, d := range store.All() {
+		// Ensure runtime fields are initialized
+		if d.Status == nil {
+			d.Status = newStatus("Pending")
+		}
+
+		deviceList.Add(buildDeviceUI(d, console, store, func() { refreshDevices(deviceList, console, store) }))
 	}
+
+	// Refresh UI safely on main thread
 	fyne.Do(func() {
 		deviceList.Refresh()
 	})

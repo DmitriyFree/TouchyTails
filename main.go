@@ -4,123 +4,95 @@ import (
 	"fmt"
 	"time"
 	"touchytails/blemanager"
+	"touchytails/devicestore"
 	"touchytails/oscmanager"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 	"tinygo.org/x/bluetooth"
 )
 
-//var blePtr atomic.Pointer[blemanager.BLEManager]
-
 var guiChan = make(chan func(), 50)               // buffered
 var oscChan = make(chan oscmanager.OSCMessage, 1) // OSC values
+var store = devicestore.New("devices.json")
 
-type Device struct {
-	ID      bluetooth.Address
-	Name    string
-	Enabled bool
-	Online  bool
-	Status  *canvas.Text
-	Event   string
-	blePtr  *blemanager.BLEManager
-}
-
-var devices = []*Device{}
-
-func nextDeviceID(devices []*Device) string {
+func nextDeviceID(store *devicestore.DeviceStore) string {
 	base := ""
 	for i := 0; i < 26; i++ { // A-Z
 		id := fmt.Sprintf("%s%c", base, 'A'+i)
-		unique := true
-		for _, d := range devices {
-			if d.ID.String() == id { // check ID, not Name
-				unique = false
-				break
-			}
-		}
-		if unique {
+		if store.FindByName("Device "+id) == nil { // check if name already exists
 			return id
 		}
 	}
 	// fallback if all letters used
-	return fmt.Sprintf("%s%d", base, len(devices)+1)
+	return fmt.Sprintf("%s%d", base, store.Count()+1)
 }
 
 // Background task that keeps BLE connected
 // RunBLEManagers starts BLE loops for all enabled devices
-func RunBLEManagers(console *Console) {
+func RunBLEManagers(store *devicestore.DeviceStore, console *Console) {
 	go func() {
 		for {
-			for _, d := range devices {
+			for _, dev := range store.All() {
 				// Skip disabled or already managed devices
-				if !d.Enabled || d.blePtr != nil {
+				if !dev.Enabled || dev.BLEPtr != nil {
 					continue
 				}
 
 				// Create a BLE manager per device
 				ble := blemanager.New()
-				d.blePtr = ble
+				dev.BLEPtr = ble
 
-				go func(dev *Device, ble *blemanager.BLEManager) {
+				go func(d *devicestore.Device, ble *blemanager.BLEManager) {
 					for {
-						// if device got removed or disabled, stop goroutine
-						if !dev.Enabled {
-							if dev.blePtr != nil {
-								dev.blePtr.Disconnect()
-								dev.blePtr = nil
+						// Stop goroutine if device disabled or removed
+						if !d.Enabled {
+							if d.BLEPtr != nil {
+								d.BLEPtr.Disconnect()
+								d.BLEPtr = nil
 							}
-							dev.Online = false
-							guiChan <- func() {
-								applyStatus(dev.Status, "Disabled")
-							}
+							d.Online = false
+							guiChan <- func() { applyStatus(d.Status, "Disabled") }
 							return
 						}
 
 						guiChan <- func() {
-							console.append(fmt.Sprintf("Scanning/connecting to %s (%s)...", dev.Name, dev.ID))
+							console.append(fmt.Sprintf("Scanning/connecting to %s (%s)...", d.Name, d.ID))
 						}
 
-						err := ble.ConnectDevice(dev.ID) // connect by stored MAC
+						err := ble.ConnectDevice(d.ID)
 						if err != nil {
 							guiChan <- func() {
-								console.append(fmt.Sprintf("Failed to connect %s: %v", dev.Name, err))
+								console.append(fmt.Sprintf("Failed to connect %s: %v", d.Name, err))
 							}
 							time.Sleep(5 * time.Second)
 							continue
 						}
 
-						guiChan <- func() {
-							console.append(fmt.Sprintf("%s connected!", dev.Name))
-						}
-						dev.Online = true
-						guiChan <- func() {
-							applyStatus(dev.Status, "Online")
-						}
+						guiChan <- func() { console.append(fmt.Sprintf("%s connected!", d.Name)) }
+						d.Online = true
+						guiChan <- func() { applyStatus(d.Status, "Online") }
 
 						// Heartbeat loop
 						for {
-							if !dev.Enabled || !ble.Ready() {
+							if !d.Enabled || !ble.Ready() {
 								guiChan <- func() {
-									console.append(fmt.Sprintf("%s disconnected, reconnecting...", dev.Name))
+									console.append(fmt.Sprintf("%s disconnected, reconnecting...", d.Name))
 								}
 								ble.Disconnect()
-								dev.Online = false
-								dev.blePtr = nil
-								guiChan <- func() {
-									applyStatus(dev.Status, "Offline")
-								}
-								break // retry connect
+								d.Online = false
+								d.BLEPtr = nil
+								guiChan <- func() { applyStatus(d.Status, "Offline") }
+								break
 							}
 
-							ble.Send("ping") // heartbeat
+							ble.Send("ping")
 							time.Sleep(2 * time.Second)
 						}
 					}
-				}(d, ble)
+				}(dev, ble)
 			}
 
 			time.Sleep(3 * time.Second) // poll device list again
@@ -130,7 +102,6 @@ func RunBLEManagers(console *Console) {
 
 // --- Main ---
 func main() {
-
 	a := app.New()
 	w := a.NewWindow("Device Manager")
 
@@ -144,58 +115,63 @@ func main() {
 	deviceListScroll.SetMinSize(fyne.NewSize(0, 300))
 	consoleScroll.SetMinSize(fyne.NewSize(0, 200))
 
-	// --- Load devices ---
-	devices = LoadDevices()
-	guiChan <- func() {
-		console.append(fmt.Sprintf("Loaded %d devices", len(devices)))
+	// --- Load devices using DeviceStore ---
+	store := devicestore.New("devices.json")
+	if err := store.Load(); err != nil {
+		guiChan <- func() { console.append("Failed to load devices: " + err.Error()) }
 	}
-	refreshDevices(deviceListVBox, console)
 
+	// Initialize runtime fields
+	for _, dev := range store.All() {
+		dev.Status = newStatus("Pending")
+		dev.Online = false
+		dev.BLEPtr = nil
+	}
+
+	guiChan <- func() { console.append(fmt.Sprintf("Loaded %d devices", len(store.All()))) }
+	refreshDevices(deviceListVBox, console, store)
+
+	// --- Discover button ---
 	discoverBtn := widget.NewButton("Discover Devices", func() {
-		guiChan <- func() {
-			console.append("Discovery triggered")
-		}
-		var ble = blemanager.New()
+		guiChan <- func() { console.append("Discovery triggered") }
+
+		ble := blemanager.New()
 		ble.ScanDevice(
 			"TouchyTails",
 			5*time.Second,
-			func(msg string) { //onmessage
-				guiChan <- func() {
-					console.append(msg)
-				}
+			func(msg string) { // onmessage
+				guiChan <- func() { console.append(msg) }
 			},
 			func(addrStr string) { // onfound
-				guiChan <- func() {
-					console.append("Found device: " + addrStr)
-				}
+				guiChan <- func() { console.append("Found device: " + addrStr) }
 
 				var addr bluetooth.Address
-				addr.Set(addrStr) // no error returned
+				addr.Set(addrStr) // ignore error
 
-				// 🔍 Check if device already exists
-				for _, d := range devices {
-					if d.ID.String() == addr.String() {
-						guiChan <- func() {
-							console.append("Device already exists, skipping: " + addrStr)
-						}
-						return // 👈 ignore duplicate
+				// Check if device already exists
+				if store.Exists(addr.String()) {
+					guiChan <- func() {
+						console.append("Device already exists, skipping: " + addrStr)
 					}
+					return
 				}
 
-				id := nextDeviceID(devices)
-				dev := &Device{
-					ID:      addr,
+				// Add new device
+				id := nextDeviceID(store)
+				dev := &devicestore.Device{
+					ID:      addr.String(),
 					Name:    "Device " + id,
 					Enabled: true,
+					Event:   "",
 					Online:  false,
 					Status:  newStatus("Pending"),
-					Event:   "",
+					BLEPtr:  nil,
 				}
-				devices = append(devices, dev)
-				SaveDevices(devices)
-				refreshDevices(deviceListVBox, console)
-			})
-
+				store.Add(dev)
+				store.Save()
+				refreshDevices(deviceListVBox, console, store)
+			},
+		)
 	})
 
 	buttonBox := container.NewHBox(discoverBtn)
@@ -210,52 +186,40 @@ func main() {
 	w.SetContent(mainUI)
 	w.Resize(fyne.NewSize(800, 600))
 
-	// --- Start BLE manager ---
-	go RunBLEManagers(console)
+	// --- Start BLE manager loop ---
+	go RunBLEManagers(store, console)
 
 	// --- Start OSC manager ---
 	oscMgr := oscmanager.New("127.0.0.1:9001", oscChan)
 	go oscMgr.Run()
 
-	// --- Process tail touches ---
+	// --- Process OSC messages ---
 	go func() {
 		for msg := range oscChan {
-			// Only process positive values
 			if msg.Value <= 0 {
 				continue
 			}
 
-			// Map [0..1] → [0.4..1] // avoid too low values
-			// to ensure minimum audible beep
+			// Map [0..1] → [0.4..1]
 			mapped := 0.4 + msg.Value*0.6
 			if mapped < 0.4 {
 				mapped = 0.4
 			}
+			valueStr := fmt.Sprintf("%.2f", mapped)
 
-			valueStr := fmt.Sprintf("%.2f", msg.Value)
-
-			for _, dev := range devices {
-				// Skip disabled or offline devices
-				if !dev.Enabled || !dev.Online {
+			for _, dev := range store.All() {
+				if !dev.Enabled || !dev.Online || dev.Event != msg.Name || dev.BLEPtr == nil {
 					continue
 				}
 
-				// Check if this device listens to this OSC event
-				if dev.Event != msg.Name {
-					continue
-				}
+				dev.BLEPtr.Send(valueStr)
 
-				// Send value via BLE if available
-				if dev.blePtr != nil {
-					dev.blePtr.Send(valueStr)
-				}
-
-				// Update console safely on GUI thread
-				guiChan <- func(d *Device, val string) func() {
+				// Update console safely
+				guiChan <- func(d *devicestore.Device, val string) func() {
 					return func() {
-						console.append(fmt.Sprintf("Tail touched: %s -> %s", d.Name, val))
+						console.append(fmt.Sprintf("%s: %s -> %s", d.Name, d.Event, val))
 					}
-				}(dev, valueStr) // pass dev and valueStr to closure to avoid closure capture issues
+				}(dev, valueStr)
 			}
 		}
 	}()
@@ -263,7 +227,6 @@ func main() {
 	// --- GUI update loop ---
 	go func() {
 		for job := range guiChan {
-			// Run each GUI update safely on Fyne main thread
 			job()
 		}
 	}()
