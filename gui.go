@@ -39,6 +39,7 @@ func applyStatus(label *canvas.Text, text string) {
 		col = statusColors["Pending"]
 	}
 	label.Text = text
+	label.Alignment = fyne.TextAlignCenter
 	label.Color = col
 	fyne.DoAndWait(func() {
 		label.Refresh()

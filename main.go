@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"fmt"
 	"time"
 	"touchytails/blemanager"
@@ -14,6 +15,8 @@ import (
 	"tinygo.org/x/bluetooth"
 )
 
+//go:embed icon.png
+var iconData []byte
 var guiChan = make(chan func(), 50)               // buffered
 var oscChan = make(chan oscmanager.OSCMessage, 1) // OSC values
 var store = devicestore.New("devices.json")
@@ -102,8 +105,13 @@ func RunBLEManagers(store *devicestore.DeviceStore, console *Console) {
 
 // --- Main ---
 func main() {
+
+	iconResource := fyne.NewStaticResource("icon.png", iconData)
+
 	a := app.New()
+	a.SetIcon(iconResource)
 	w := a.NewWindow("Device Manager")
+	w.SetIcon(iconResource) // optional, just in case
 
 	// --- Console ---
 	console := newConsole(100)
@@ -233,4 +241,5 @@ func main() {
 
 	// --- Run GUI ---
 	w.ShowAndRun()
+
 }

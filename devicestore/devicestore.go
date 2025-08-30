@@ -158,3 +158,37 @@ func (s *DeviceStore) Count() int {
 	defer s.mu.Unlock()
 	return len(s.devices)
 }
+
+// --- devicestore/device_runtime_helpers.go ---
+func (s *DeviceStore) SetBLE(id string, ble *blemanager.BLEManager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if dev := s.Find(id); dev != nil {
+		dev.BLEPtr = ble
+	}
+}
+
+func (s *DeviceStore) ClearBLE(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if dev := s.Find(id); dev != nil {
+		dev.BLEPtr = nil
+	}
+}
+
+func (s *DeviceStore) SetOnline(id string, online bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if dev := s.Find(id); dev != nil {
+		dev.Online = online
+	}
+}
+
+func (s *DeviceStore) IsEnabled(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if dev := s.Find(id); dev != nil {
+		return dev.Enabled
+	}
+	return false
+}
