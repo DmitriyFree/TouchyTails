@@ -53,66 +53,84 @@ func nextDeviceID(devices []*Device) string {
 // Background task that keeps BLE connected
 // RunBLEManagers starts BLE loops for all enabled devices
 func RunBLEManagers(console *Console) {
-	for _, d := range devices {
-		if !d.Enabled || d.blePtr != nil {
-			continue // skip disabled or already managed devices
-		}
-
-		// Create a BLE manager per device
-		var ble = blemanager.New()
-		d.blePtr = ble
-
-		go func(dev *Device) {
-			for {
-				if !dev.Enabled {
-					time.Sleep(2 * time.Second)
+	go func() {
+		for {
+			for _, d := range devices {
+				// Skip disabled or already managed devices
+				if !d.Enabled || d.blePtr != nil {
 					continue
 				}
-				guiChan <- func() {
-					console.append(fmt.Sprintf("Scanning/connecting to %s (%s)...", dev.Name, dev.ID))
-				}
-				err := ble.ConnectDevice(dev.ID) // connect by stored MAC
-				if err != nil {
-					guiChan <- func() {
-						console.append(fmt.Sprintf("Failed to connect %s: %v", dev.Name, err))
-					}
-					time.Sleep(5 * time.Second)
-					continue
-				}
-				guiChan <- func() {
-					console.append(fmt.Sprintf("%s connected!", dev.Name))
-				}
-				d.blePtr.Send("1") // welcome beep
-				d.Online = true
-				guiChan <- func() {
-					console.append("Beep sent to " + d.ID.String())
-					applyStatus(d.Status, "Online")
-				}
 
-				// Heartbeat loop
-				for {
-					if !dev.Enabled || !ble.Ready() {
-						guiChan <- func() {
-							console.append(fmt.Sprintf("%s disconnected, reconnecting...", dev.Name))
-						}
-						d.blePtr.Disconnect()
-						d.Online = false
-						guiChan <- func() {
-							applyStatus(d.Status, "Offline")
-						}
-						break // retry connect
-					}
+				// Create a BLE manager per device
+				ble := blemanager.New()
+				d.blePtr = ble
 
-					ble.Send("0") // heartbeat
-					time.Sleep(2 * time.Second)
-				}
+				go func(dev *Device, ble *blemanager.BLEManager) {
+					for {
+						// if device got removed or disabled, stop goroutine
+						if !dev.Enabled {
+							if dev.blePtr != nil {
+								dev.blePtr.Disconnect()
+								dev.blePtr = nil
+							}
+							dev.Online = false
+							guiChan <- func() {
+								applyStatus(dev.Status, "Disabled")
+							}
+							return
+						}
+
+						guiChan <- func() {
+							console.append(fmt.Sprintf("Scanning/connecting to %s (%s)...", dev.Name, dev.ID))
+						}
+
+						err := ble.ConnectDevice(dev.ID) // connect by stored MAC
+						if err != nil {
+							guiChan <- func() {
+								console.append(fmt.Sprintf("Failed to connect %s: %v", dev.Name, err))
+							}
+							time.Sleep(5 * time.Second)
+							continue
+						}
+
+						guiChan <- func() {
+							console.append(fmt.Sprintf("%s connected!", dev.Name))
+						}
+						dev.Online = true
+						guiChan <- func() {
+							applyStatus(dev.Status, "Online")
+						}
+
+						// Heartbeat loop
+						for {
+							if !dev.Enabled || !ble.Ready() {
+								guiChan <- func() {
+									console.append(fmt.Sprintf("%s disconnected, reconnecting...", dev.Name))
+								}
+								ble.Disconnect()
+								dev.Online = false
+								dev.blePtr = nil
+								guiChan <- func() {
+									applyStatus(dev.Status, "Offline")
+								}
+								break // retry connect
+							}
+
+							ble.Send("ping") // heartbeat
+							time.Sleep(2 * time.Second)
+						}
+					}
+				}(d, ble)
 			}
-		}(d)
-	}
+
+			time.Sleep(3 * time.Second) // poll device list again
+		}
+	}()
 }
 
 // --- Main ---
 func main() {
+
 	a := app.New()
 	w := a.NewWindow("Device Manager")
 
@@ -138,27 +156,46 @@ func main() {
 			console.append("Discovery triggered")
 		}
 		var ble = blemanager.New()
-		ble.ScanDevice("TouchyTails", 10*time.Second, func(addrStr string) {
-			guiChan <- func() {
-				console.append("Found device: " + addrStr)
-			}
+		ble.ScanDevice(
+			"TouchyTails",
+			5*time.Second,
+			func(msg string) { //onmessage
+				guiChan <- func() {
+					console.append(msg)
+				}
+			},
+			func(addrStr string) { // onfound
+				guiChan <- func() {
+					console.append("Found device: " + addrStr)
+				}
 
-			var addr bluetooth.Address
-			addr.Set(addrStr) // no error returned
+				var addr bluetooth.Address
+				addr.Set(addrStr) // no error returned
 
-			id := nextDeviceID(devices)
-			dev := &Device{
-				ID:      addr,
-				Name:    "Device " + id,
-				Enabled: true,
-				Online:  false,
-				Status:  newStatus("Pending"),
-				Event:   "",
-			}
-			devices = append(devices, dev)
-			SaveDevices(devices)
-			refreshDevices(deviceListVBox, console)
-		})
+				// 🔍 Check if device already exists
+				for _, d := range devices {
+					if d.ID.String() == addr.String() {
+						guiChan <- func() {
+							console.append("Device already exists, skipping: " + addrStr)
+						}
+						return // 👈 ignore duplicate
+					}
+				}
+
+				id := nextDeviceID(devices)
+				dev := &Device{
+					ID:      addr,
+					Name:    "Device " + id,
+					Enabled: true,
+					Online:  false,
+					Status:  newStatus("Pending"),
+					Event:   "",
+				}
+				devices = append(devices, dev)
+				SaveDevices(devices)
+				refreshDevices(deviceListVBox, console)
+			})
+
 	})
 
 	buttonBox := container.NewHBox(discoverBtn)
@@ -186,6 +223,13 @@ func main() {
 			// Only process positive values
 			if msg.Value <= 0 {
 				continue
+			}
+
+			// Map [0..1] → [0.4..1] // avoid too low values
+			// to ensure minimum audible beep
+			mapped := 0.4 + msg.Value*0.6
+			if mapped < 0.4 {
+				mapped = 0.4
 			}
 
 			valueStr := fmt.Sprintf("%.2f", msg.Value)

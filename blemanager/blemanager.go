@@ -28,43 +28,44 @@ type BLEManager struct {
 // New creates a new BLEManager and enables the adapter
 func New() *BLEManager {
 	if err := adapter.Enable(); err != nil {
-		log.Fatal("failed to enable BLE adapter:", err)
+		fmt.Println("BLE:", err)
 	}
 	return &BLEManager{}
 }
 
-func (b *BLEManager) ScanDevice(deviceName string, timeout time.Duration, onFound func(addr string)) (bluetooth.Address, error) {
-	fmt.Println("Scanning for BLE devices...")
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+func (b *BLEManager) ScanDevice(
+	deviceName string,
+	timeout time.Duration,
+	onEvent func(msg string), // <-- new callback
+	onFound func(addr string),
+) {
+	go func() {
+		onEvent("Starting scan for " + deviceName + "...")
 
-	var deviceAddress bluetooth.Address
-	found := make(chan struct{})
-	var once sync.Once
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
 
-	err := adapter.Scan(func(adapter *bluetooth.Adapter, result bluetooth.ScanResult) {
-		fmt.Printf("Found device: %s [%s]\n", result.Address.String(), result.LocalName())
+		// goroutine to stop after timeout
+		go func() {
+			<-ctx.Done()
+			onEvent("Scanning done (timeout)")
+			adapter.StopScan()
+		}()
 
-		if result.LocalName() == deviceName {
-			once.Do(func() {
-				deviceAddress = result.Address
-				fmt.Println("Found", deviceName, "at", deviceAddress, "! Stopping scan...")
-				adapter.StopScan()
-				close(found)
-			})
+		// This blocks until StopScan is called
+		err := adapter.Scan(func(adapter *bluetooth.Adapter, result bluetooth.ScanResult) {
+			onEvent("Found: " + result.LocalName() + " [" + result.Address.String() + "]")
+			if result.LocalName() == deviceName {
+				onEvent("Found target: " + result.LocalName() + " [" + result.Address.String() + "]")
+				onFound(result.Address.String())
+			}
+		})
+		if err != nil {
+			onEvent("Failed to start scan:" + err.Error())
+			return
 		}
-	})
-	if err != nil {
-		return bluetooth.Address{}, fmt.Errorf("failed to start scan: %w", err)
-	}
-
-	select {
-	case <-found:
-		onFound(deviceAddress.String())
-		return deviceAddress, nil
-	case <-ctx.Done():
-		return bluetooth.Address{}, fmt.Errorf("scan timeout: device not found")
-	}
+		onEvent("Scan finished")
+	}()
 }
 
 // Connect scans and connects to the named device
@@ -141,7 +142,7 @@ func (b *BLEManager) Send(data string) {
 			log.Println("Failed to send data:", err)
 			b.ready = false
 		} else {
-			fmt.Println("Sent:", data)
+			//fmt.Println("Sent:", data)
 		}
 	case <-time.After(1 * time.Second):
 		log.Println("Send timeout:", data)
@@ -151,6 +152,9 @@ func (b *BLEManager) Send(data string) {
 
 // Disconnect safely disconnects from the device
 func (b *BLEManager) Disconnect() {
+	if b == nil {
+		return // nothing to do
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 

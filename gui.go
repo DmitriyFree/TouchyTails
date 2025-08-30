@@ -2,7 +2,9 @@
 package main
 
 import (
+	"fmt"
 	"image/color"
+	"math/rand/v2"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -73,18 +75,31 @@ func (c *Console) append(line string) {
 // --- UI building ---
 func buildDeviceUI(d *Device, console *Console, refreshDevices func()) *fyne.Container {
 	// Labels & Entries
-	idLabel := widget.NewLabel(d.ID.String())
+	idLabel := canvas.NewText(d.ID.String(), color.White)
+	idLabel.TextSize = 6
+	idLabel.Resize(fyne.NewSize(800, 20))
 	nameEntry := widget.NewEntry()
 	nameEntry.SetText(d.Name)
 	eventEntry := widget.NewEntry()
 	eventEntry.SetText(d.Event)
 	statusLabel := d.Status
+	statusLabel.Alignment = fyne.TextAlignCenter
 
 	// Handlers
 	onBeep := func() {
-		d.blePtr.Send("1")
+		//d.blePtr.Send("1") // simple beep
+		// random beep intensity for fun
+		//
+		if !d.Online {
+			guiChan <- func() {
+				console.append("Device offline, cannot beep: " + d.ID.String())
+			}
+			return
+		}
+		val := 0.4 + rand.Float64()*0.6         // random float in [0.4, 1.0]
+		d.blePtr.Send(fmt.Sprintf("%.2f", val)) // format with 2 decimals
 		guiChan <- func() {
-			console.append("Beep sent to " + d.ID.String())
+			console.append("Beep: " + fmt.Sprintf("%.2f", val) + " for " + d.ID.String())
 		}
 	}
 
@@ -112,6 +127,9 @@ func buildDeviceUI(d *Device, console *Console, refreshDevices func()) *fyne.Con
 	}
 
 	onRemove := func() {
+		d.Enabled = false
+		d.blePtr.Disconnect()
+		d.blePtr = nil
 		newDevices := []*Device{}
 		for _, dev := range devices {
 			if dev.ID != d.ID {
@@ -174,6 +192,7 @@ func refreshDevices(deviceList *fyne.Container, console *Console) {
 	for _, d := range devices {
 		deviceList.Add(buildDeviceUI(d, console, func() { refreshDevices(deviceList, console) }))
 	}
-
-	deviceList.Refresh()
+	fyne.Do(func() {
+		deviceList.Refresh()
+	})
 }

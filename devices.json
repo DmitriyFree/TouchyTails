@@ -1,8 +1,8 @@
 [
   {
     "id": "711966d9-0890-fea2-625c-c39e3fea1cf9",
-    "name": "Proto1",
+    "name": "Device A",
     "enabled": true,
-    "event": "TailTouch"
+    "event": "TailTouched"
   }
 ]

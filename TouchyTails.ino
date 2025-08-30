@@ -76,8 +76,10 @@ void initBLE() {
 
 // ==== BLE Event ====
 void handleData(String data) {
-  float value = data.toFloat();   
-  value = constrain(value, 0.0, 1.0); 
+  
+  float value = data.toFloat();
+  if(value <= 0)return; // no output for zero
+  value = constrain(value, 0, 1.0); // clamp to [0,1]
   targetValue = value;  
   currentValue = value;  // snap immediately to new value
   lastUpdate = millis();
@@ -101,6 +103,7 @@ void onWrite(BLEDevice central, BLECharacteristic characteristic) {
 
 // ==== OUTPUT ====
 void applyOutput(float value) {
+
   // PWM duty cycle 0–255
   int duty = (int)(value * 255.0);
   analogWrite(0, duty);
