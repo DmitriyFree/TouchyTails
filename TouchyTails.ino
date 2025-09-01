@@ -1,13 +1,12 @@
 #include <ArduinoBLE.h>
 #include <Preferences.h>
+#include <WiFi.h>
 
 // ==== CONFIG ====
 #define DEVICE_NAME         "TouchyTails"
 #define SERVICE_UUID        "0000ab00-0000-1000-8000-00805f9b34fb"
 #define CHARACTERISTIC_UUID "0000ab01-0000-1000-8000-00805f9b34fb"
-#define CHARACTERISTIC_SIZE 1000
-
-Preferences preferences;
+#define CHARACTERISTIC_SIZE 100
 
 // ==== BLE Elements ====
 BLEService Service(SERVICE_UUID);
@@ -27,9 +26,11 @@ const unsigned long fadeTime = 500; // ms to fade to zero
 // ==== SETUP ====
 
 void setup() {
+  btStop();
+  setCpuFrequencyMhz(80);
+  WiFi.mode(WIFI_OFF);
   Serial.begin(115200);
-  preferences.begin("data", false);
-
+  
   initBLE();
   pinMode(0, OUTPUT); // motor
   pinMode(8, OUTPUT); // LED
@@ -56,10 +57,6 @@ void initBLE() {
   Characteristic.addDescriptor(CharacteristicDescriptor);
   Service.addCharacteristic(Characteristic);
   BLE.addService(Service);
-
-  // Restore saved data on reconnect
-  String savedData = preferences.getString("data", "");
-  Characteristic.writeValue(savedData.c_str());
 
   // Setup handler for writes from central
   Characteristic.setEventHandler(BLEWritten, onWrite);
@@ -133,4 +130,5 @@ void loop() {
     currentValue = 0.0;
     applyOutput(currentValue);
   }
+  delay(100);
 }

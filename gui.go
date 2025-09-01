@@ -192,6 +192,7 @@ func refreshDevices(deviceList *fyne.Container, console *Console, store *devices
 		// Ensure runtime fields are initialized
 		if d.Status == nil {
 			d.Status = newStatus("Pending")
+			d.Status.Alignment = fyne.TextAlignCenter
 		}
 
 		deviceList.Add(buildDeviceUI(d, console, store, func() { refreshDevices(deviceList, console, store) }))

@@ -110,7 +110,7 @@ func main() {
 
 	a := app.New()
 	a.SetIcon(iconResource)
-	w := a.NewWindow("Device Manager")
+	w := a.NewWindow("Touchy Tails")
 	w.SetIcon(iconResource) // optional, just in case
 
 	// --- Console ---
@@ -132,6 +132,7 @@ func main() {
 	// Initialize runtime fields
 	for _, dev := range store.All() {
 		dev.Status = newStatus("Pending")
+		dev.Status.Alignment = fyne.TextAlignCenter
 		dev.Online = false
 		dev.BLEPtr = nil
 	}
@@ -188,11 +189,10 @@ func main() {
 	mainUI := container.NewVBox(
 		deviceListScroll,
 		buttonBox,
-		widget.NewLabel("Console:"),
 		consoleScroll,
 	)
 	w.SetContent(mainUI)
-	w.Resize(fyne.NewSize(800, 600))
+	w.Resize(fyne.NewSize(800, 550))
 
 	// --- Start BLE manager loop ---
 	go RunBLEManagers(store, console)
