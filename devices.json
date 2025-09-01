@@ -1,13 +1,13 @@
 [
   {
-    "id": "711966d9-0890-fea2-625c-c39e3fea1cf9",
+    "id": "71:19:66:D9:08:90",
     "name": "Device A",
     "enabled": false,
-    "event": ""
+    "event": "TailTouch"
   },
   {
     "id": "50:78:7D:45:BC:12",
-    "name": "Device B",
+    "name": "Device B1",
     "enabled": true,
     "event": "TailTouch"
   }

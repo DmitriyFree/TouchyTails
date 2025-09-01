@@ -18,10 +18,9 @@ BLEStringCharacteristic Characteristic(
 BLEDescriptor CharacteristicDescriptor("2901", "Data");
 
 // ==== STATE ====
-float currentValue = 0.0;      // active (fading) value
-float targetValue = 0.0;       // last received value
+float currentValue = 0.0;      // current output value [0..1]
 unsigned long lastUpdate = 0;  // millis when last update arrived
-const unsigned long fadeTime = 500; // ms to fade to zero
+const unsigned long durationLimit = 500; // ms until output goes to zero
 
 // ==== SETUP ====
 
@@ -77,8 +76,7 @@ void handleData(String data) {
   float value = data.toFloat();
   if(value <= 0)return; // no output for zero
   value = constrain(value, 0, 1.0); // clamp to [0,1]
-  targetValue = value;  
-  currentValue = value;  // snap immediately to new value
+  currentValue = value;  // store current value
   lastUpdate = millis();
 
   applyOutput(currentValue);
@@ -122,11 +120,7 @@ void loop() {
   unsigned long now = millis();
   unsigned long elapsed = now - lastUpdate;
 
-  if (elapsed < fadeTime) {
-    // Fade linearly from targetValue to 0 over fadeTime
-    float factor = 1.0 - (float)elapsed / (float)fadeTime;
-    //currentValue = targetValue * factor;
-  } else {
+  if (elapsed >= durationLimit) {
     currentValue = 0.0;
     applyOutput(currentValue);
   }
