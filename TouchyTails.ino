@@ -1,5 +1,4 @@
 #include <ArduinoBLE.h>
-#include <Preferences.h>
 #include <WiFi.h>
 
 // ==== CONFIG ====
