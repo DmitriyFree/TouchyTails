@@ -14,6 +14,6 @@
 
 <p><b>## Downloads</b></p>
 <ul>
-<li>https://github.com/DmitriyFree/TouchyTails/blob/main/touchytails.exe</li>
+<li>[Windows app] https://github.com/DmitriyFree/TouchyTails/blob/main/touchytails.exe</li>
 <li>[ESP32 Firmware Uploader](https://junefree.ru/firmware)</li>
 </ul>
