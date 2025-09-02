@@ -69,8 +69,12 @@ func (rm *RuntimeManager) manageDevice(store *DeviceStore, dev *Device) {
 	for store.IsEnabled(dev.ID) {
 		rm.console.Append(fmt.Sprintf("Scanning/connecting to %s (%s)...", dev.Name, dev.ID))
 
+		ble := blemanager.New() // <-- create a fresh one each attempt
+		store.SetBLE(dev.ID, ble)
+
 		if err := ble.ConnectDevice(dev.ID); err != nil {
 			rm.console.Append(fmt.Sprintf("Failed to connect %s: %v", dev.Name, err))
+			store.ClearBLE(dev.ID) // cleanup reference
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -85,6 +89,7 @@ func (rm *RuntimeManager) manageDevice(store *DeviceStore, dev *Device) {
 			time.Sleep(2 * time.Second)
 		}
 
+		// Disconnect and cleanup
 		ble.Disconnect()
 		store.SetOnline(dev.ID, false)
 		store.ClearBLE(dev.ID)

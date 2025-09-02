@@ -97,7 +97,7 @@ func buildDeviceUI(d *devicestore.Device, console *Console, store *devicestore.D
 		d.Status = newStatus("Pending")
 	}
 	idLabel := canvas.NewText(d.ID, color.White)
-	idLabel.TextSize = 10
+	idLabel.TextSize = 6
 	idLabel.Alignment = fyne.TextAlignCenter
 	idLabel.Resize(fyne.NewSize(50, 20))
 

@@ -29,7 +29,7 @@ func New(addr string, oscChan chan OSCMessage) *OSCManager {
 }
 
 // Run starts the OSC server and listens for TailTouch messages
-func (o *OSCManager) Run() {
+func (o *OSCManager) Run(onEvent func(msg string)) {
 	dispatcher := osc.NewStandardDispatcher()
 
 	// Wildcard handler (optional for debugging)
@@ -38,7 +38,7 @@ func (o *OSCManager) Run() {
 	// })
 
 	// TailTouch handler
-	dispatcher.AddMsgHandler("/avatar/parameters/TailTouch", func(msg *osc.Message) {
+	dispatcher.AddMsgHandler("/avatar/parameters/*", func(msg *osc.Message) {
 		fmt.Printf("Received OSC message: %s\n", msg.Address)
 		fmt.Printf("Arguments: %v\n", msg.Arguments)
 
@@ -70,7 +70,7 @@ func (o *OSCManager) Run() {
 		Dispatcher: dispatcher,
 	}
 
-	log.Printf("Listening for OSC on %s...\n", o.server.Addr)
+	onEvent(fmt.Sprintf("Listening for OSC on %s...\n", o.server.Addr))
 	if err := o.server.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}

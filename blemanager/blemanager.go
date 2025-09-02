@@ -78,6 +78,7 @@ func (b *BLEManager) ConnectDevice(addr string) error {
 
 	device, err := adapter.Connect(address, bluetooth.ConnectionParams{})
 	if err != nil {
+
 		return fmt.Errorf("failed to connect: %w", err)
 	}
 
@@ -164,8 +165,11 @@ func (b *BLEManager) Disconnect() {
 
 	if b.ready {
 		b.device.Disconnect()
+		b.device = bluetooth.Device{}
+		b.char = nil
 		b.ready = false
 	}
+
 }
 func (b *BLEManager) Ready() bool {
 	b.mu.Lock()

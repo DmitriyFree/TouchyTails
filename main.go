@@ -7,7 +7,6 @@ import (
 	"touchytails/blemanager"
 	"touchytails/devicestore"
 	"touchytails/oscmanager"
-	"touchytails/util"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -77,7 +76,6 @@ func loadDevices(console *Console, deviceListVBox *fyne.Container) {
 
 	// Normalize IDs (migration)
 	for _, dev := range store.All() {
-		dev.ID = util.NormalizeDeviceID(dev.ID)
 		dev.Status = newStatus("Pending")
 		dev.Status.Alignment = fyne.TextAlignCenter
 	}
@@ -100,20 +98,19 @@ func bleScan(console *Console, deviceListVBox *fyne.Container) {
 }
 
 func addDeviceFromBLE(console *Console, deviceListVBox *fyne.Container, addrStr string) {
-	normalizedID := util.NormalizeDeviceID(addrStr)
-	postGUI(func() { console.append("Found device: " + normalizedID) })
+	postGUI(func() { console.append("Found device: " + addrStr) })
 
 	var addr bluetooth.Address
 	addr.Set(addrStr)
 
-	if store.Exists(normalizedID) {
-		postGUI(func() { console.append("Device already exists, skipping: " + normalizedID) })
+	if store.Exists(addrStr) {
+		postGUI(func() { console.append("Device already exists, skipping: " + addrStr) })
 		return
 	}
 
 	letter := devicestore.NextDeviceLetter(store)
 	dev := &devicestore.Device{
-		ID:      normalizedID,
+		ID:      addrStr,
 		Name:    "Device " + letter,
 		Enabled: true,
 		Status:  newStatus("Pending"),
@@ -132,7 +129,9 @@ func startRuntimeManagers(console *Console) {
 
 	// OSC manager
 	oscMgr := oscmanager.New("127.0.0.1:9001", oscChan)
-	go oscMgr.Run()
+	go oscMgr.Run(func(msg string) {
+		console.append(msg)
+	})
 
 	// OSC processor
 	go processOSC(console)
