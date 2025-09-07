@@ -154,6 +154,7 @@ func processOSC(console *Console) {
 		valueStr := fmt.Sprintf("%.2f", mapOSCValue(msg.Value))
 
 		for _, dev := range store.All() {
+
 			if !dev.Enabled || !dev.Online || dev.Event != msg.Name || dev.BLEPtr == nil {
 				continue
 			}
