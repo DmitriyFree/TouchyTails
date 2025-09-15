@@ -76,7 +76,7 @@ func (c *Console) append(line string) {
 	if len(lines) > c.limit {
 		lines = lines[len(lines)-c.limit:]
 	}
-	c.widget.SetText(strings.Join(lines, "\n"))
+	postGUI(func() { c.widget.SetText(strings.Join(lines, "\n")) })
 	c.widget.CursorRow = len(lines)
 }
 

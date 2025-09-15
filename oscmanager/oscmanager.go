@@ -38,27 +38,28 @@ func (o *OSCManager) Run(onEvent func(msg string)) {
 	// })
 
 	// TailTouch handler
-	dispatcher.AddMsgHandler("/avatar/parameters/*", func(msg *osc.Message) {
-		fmt.Printf("Received OSC message: %s\n", msg.Address)
-		fmt.Printf("Arguments: %v\n", msg.Arguments)
+	dispatcher.AddMsgHandler("*", func(msg *osc.Message) {
+		//fmt.Printf("Received OSC message: %s\n", msg.Address)
+		//fmt.Printf("Arguments: %v\n", msg.Arguments)
 
 		prefix := "/avatar/parameters/"
 		name := strings.TrimPrefix(msg.Address, prefix)
-
-		if len(msg.Arguments) > 0 {
-			if val, ok := msg.Arguments[0].(float32); ok {
-				select {
-				case o.oscChan <- OSCMessage{
-					Name:  name,
-					Value: val,
-				}:
-					// sent successfully
-				default:
-					// channel full: remove old value then insert new one
-					<-o.oscChan
-					o.oscChan <- OSCMessage{
+		if strings.Contains(msg.Address, prefix) {
+			if len(msg.Arguments) > 0 {
+				if val, ok := msg.Arguments[0].(float32); ok {
+					select {
+					case o.oscChan <- OSCMessage{
 						Name:  name,
 						Value: val,
+					}:
+						// sent successfully
+					default:
+						// channel full: remove old value then insert new one
+						<-o.oscChan
+						o.oscChan <- OSCMessage{
+							Name:  name,
+							Value: val,
+						}
 					}
 				}
 			}
