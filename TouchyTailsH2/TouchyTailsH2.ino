@@ -1,14 +1,20 @@
 #include <NimBLEDevice.h>
+#include <Adafruit_NeoPixel.h>
 
 // ==== CONFIG ====
 #define DEVICE_NAME         "TouchyTails"
 #define SERVICE_UUID        "0000ab00-0000-1000-8000-00805f9b34fb"
 #define CHARACTERISTIC_UUID "0000ab01-0000-1000-8000-00805f9b34fb"
 
+#define LED_PIN    8     // GPIO8
+#define NUM_LEDS   1     // number of NeoPixels in your strip
+
+Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
+
 // ==== STATE ====
 float currentValue = 0.0;      // current output value [0..1]
 unsigned long lastUpdate = 0;  // millis when last update arrived
-const unsigned long durationLimit = 500; // ms until output goes to zero
+const unsigned long durationLimit = 1000; // ms until output goes to zero
 
 // ==== BLE Elements ====
 NimBLEServer* pServer;
@@ -26,15 +32,15 @@ void handleData(String data) {
 }
 // ==== CALLBACKS ====
 class CharacteristicCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* c) {
+  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
     std::string value = c->getValue();
-    if (value.empty()) return;
+    //if (value.empty()) return;
 
     String received = String(value.c_str());
     Serial.println("From BLE: " + received);
     handleData(received);
   }
-};
+} chrCallbacks;
 
 // ==== SETUP ====
 void setup() {
@@ -42,11 +48,18 @@ void setup() {
 
   initBLE();
 
-  pinMode(0, OUTPUT); // motor
+  pinMode(2, OUTPUT); // motor
   pinMode(13, OUTPUT); // LED
-  pinMode(1, OUTPUT); // buzzer
-  digitalWrite(0, LOW);
+  pinMode(3, OUTPUT); // buzzer
+  digitalWrite(2, LOW);
   digitalWrite(13, LOW); // inverted idle
+
+  strip.begin();           // initialize
+  strip.show();            // turn all off
+  strip.setBrightness(50); // optional, 0–255
+  strip.setPixelColor(0, strip.Color(0, 0, 0));
+  strip.show();
+
 
   // Print useful info
   Serial.print(F("My address: "));
@@ -65,14 +78,18 @@ void initBLE() {
 
   pCharacteristic = pService->createCharacteristic(
     CHARACTERISTIC_UUID,
-    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY
+    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::NOTIFY
   );
 
-  pCharacteristic->setCallbacks(new CharacteristicCallbacks());
+  pCharacteristic->setCallbacks(&chrCallbacks);
+  //pCharacteristic->setAccessPermissions(NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE);
   pService->start();
 
   NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
+  NimBLEAdvertisementData advertisement;
+  advertisement.setName(DEVICE_NAME);
+  advertisement.addServiceUUID(SERVICE_UUID);
+  pAdvertising->setAdvertisementData(advertisement);
   
   // create a scan response object
   NimBLEAdvertisementData scanResponse;
@@ -89,27 +106,27 @@ void initBLE() {
 void applyOutput(float value) {
   // PWM duty cycle 0–255
   int duty = (int)(value * 255.0);
-  analogWrite(0, duty);
-  if(value>0)digitalWrite(13, HIGH);
-  else digitalWrite(13, LOW);
+  analogWrite(2, duty);
 
   // Frequency 0–1000 Hz
   int freq = (int)(value * 1000.0);
   if (freq > 0) {
-    tone(1, freq);
+    tone(3, freq);
   } else {
-    noTone(1);
+    noTone(3);
   }
 }
 
 // ==== MAIN LOOP ====
 void loop() {
-  unsigned long now = millis();
-  unsigned long elapsed = now - lastUpdate;
+  if(currentValue!=0){
+    unsigned long now = millis();
+    unsigned long elapsed = now - lastUpdate;
 
-  if (elapsed >= durationLimit) {
-    currentValue = 0.0;
-    applyOutput(currentValue);
+    if (elapsed >= durationLimit) {
+      currentValue = 0.0;
+      applyOutput(currentValue);
+    }
   }
   delay(100);
 }
