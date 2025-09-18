@@ -2,87 +2,97 @@
 #include <Adafruit_NeoPixel.h>
 
 // ==== CONFIG ====
+// BLE
 #define DEVICE_NAME         "TouchyTails"
 #define SERVICE_UUID        "0000ab00-0000-1000-8000-00805f9b34fb"
 #define CHARACTERISTIC_UUID "0000ab01-0000-1000-8000-00805f9b34fb"
 
-#define LED_PIN    8     // GPIO8
-#define NUM_LEDS   1     // number of NeoPixels in your strip
+// Hardware pins
+#define MOTOR_PIN    2
+#define LED_PIN      13   // onboard indicator LED (inverted idle)
+#define BUZZER_PIN   3
+#define RGB_PIN      8    // WS2812 / NeoPixel
+#define NUM_LEDS     1
 
-Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
+// Timing (ms)
+const unsigned long DURATION_LIMIT = 1000;   // stop output if no updates
+const unsigned long WATCHDOG_LIMIT = 10000;  // reboot if no messages
 
 // ==== STATE ====
+Adafruit_NeoPixel strip(NUM_LEDS, RGB_PIN, NEO_GRB + NEO_KHZ800);
+
 float currentValue = 0.0;      // current output value [0..1]
-unsigned long lastUpdate = 0;  // millis when last update arrived
-const unsigned long durationLimit = 1000; // ms until output goes to zero
+unsigned long lastUpdate = 0;  // last valid BLE update
 
 // ==== BLE Elements ====
 NimBLEServer* pServer;
 NimBLEService* pService;
 NimBLECharacteristic* pCharacteristic;
-// ==== BLE Event ====
-void handleData(String data) {
-  float value = data.toFloat();
-  if (value <= 0) return; // no output for zero
-  value = constrain(value, 0, 1.0); // clamp to [0,1]
-  currentValue = value;
-  lastUpdate = millis();
 
+// ==== HELPERS ====
+void applyOutput(float value) {
+  // PWM duty cycle 0–255
+  int duty = (int)(value * 255.0);
+  analogWrite(MOTOR_PIN, duty);
+
+  // Frequency 0–1000 Hz
+  int freq = (int)(value * 1000.0);
+  if (freq > 0) {
+    tone(BUZZER_PIN, freq);
+  } else {
+    noTone(BUZZER_PIN);
+  }
+}
+
+void resetRGB() {
+  strip.begin();
+  strip.setBrightness(50);
+  strip.clear();
+  strip.show();
+}
+
+// ==== BLE Event ====
+void handleData(const String& data) {
+  float value = data.toFloat();
+  if (value <= 0) return; // ignore zeros
+  currentValue = constrain(value, 0, 1.0);
+  lastUpdate = millis();
   applyOutput(currentValue);
 }
+
 // ==== CALLBACKS ====
 class CharacteristicCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
     std::string value = c->getValue();
-    //if (value.empty()) return;
-
-    String received = String(value.c_str());
+    if (value.empty()) return;
+    String received(value.c_str());
     Serial.println("From BLE: " + received);
     handleData(received);
   }
 } chrCallbacks;
 
-// ==== SETUP ====
-void setup() {
-  Serial.begin(115200);
+class ServerCallbacks : public NimBLEServerCallbacks {
+  void onDisconnect(NimBLEServer* s, NimBLEConnInfo& connInfo, int reason) override {
+    Serial.println("BLE disconnected! Forcing reboot...");
+    ESP.restart();
+  }
+} srvCallbacks;
 
-  initBLE();
-
-  pinMode(2, OUTPUT); // motor
-  pinMode(13, OUTPUT); // LED
-  pinMode(3, OUTPUT); // buzzer
-  digitalWrite(2, LOW);
-  digitalWrite(13, LOW); // inverted idle
-
-  strip.begin();           // initialize
-  strip.show();            // turn all off
-  strip.setBrightness(50); // optional, 0–255
-  strip.setPixelColor(0, strip.Color(0, 0, 0));
-  strip.show();
-
-
-  // Print useful info
-  Serial.print(F("My address: "));
-  Serial.println(NimBLEDevice::getAddress().toString().c_str());
-  Serial.print(F("Main service: "));
-  Serial.println(SERVICE_UUID);
-  Serial.print(F("Main characteristic: "));
-  Serial.println(CHARACTERISTIC_UUID);
-}
-
+// ==== BLE INIT ====
 void initBLE() {
   NimBLEDevice::init(DEVICE_NAME);
 
   pServer = NimBLEDevice::createServer();
+  pServer->setCallbacks(&srvCallbacks);
+
   pService = pServer->createService(SERVICE_UUID);
 
   pCharacteristic = pService->createCharacteristic(
     CHARACTERISTIC_UUID,
-    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::NOTIFY
+    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE |
+    NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::NOTIFY
   );
-
   pCharacteristic->setCallbacks(&chrCallbacks);
-  //pCharacteristic->setAccessPermissions(NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE);
   pService->start();
 
   NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
@@ -90,43 +100,48 @@ void initBLE() {
   advertisement.setName(DEVICE_NAME);
   advertisement.addServiceUUID(SERVICE_UUID);
   pAdvertising->setAdvertisementData(advertisement);
-  
-  // create a scan response object
-  NimBLEAdvertisementData scanResponse;
-  scanResponse.setName(DEVICE_NAME);      // set device name for scan response
-  pAdvertising->setScanResponseData(scanResponse);
-  pAdvertising->start();
 
+  NimBLEAdvertisementData scanResponse;
+  scanResponse.setName(DEVICE_NAME);
+  pAdvertising->setScanResponseData(scanResponse);
+
+  pAdvertising->start();
   Serial.println("BLE started, advertising...");
 }
 
+// ==== SETUP ====
+void setup() {
+  Serial.begin(115200);
 
+  initBLE();
+  resetRGB();
 
-// ==== OUTPUT ====
-void applyOutput(float value) {
-  // PWM duty cycle 0–255
-  int duty = (int)(value * 255.0);
-  analogWrite(2, duty);
+  pinMode(MOTOR_PIN, OUTPUT);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
 
-  // Frequency 0–1000 Hz
-  int freq = (int)(value * 1000.0);
-  if (freq > 0) {
-    tone(3, freq);
-  } else {
-    noTone(3);
-  }
+  digitalWrite(MOTOR_PIN, LOW);
+  digitalWrite(LED_PIN, LOW); // inverted idle
+
+  Serial.print("My address: ");
+  Serial.println(NimBLEDevice::getAddress().toString().c_str());
 }
 
-// ==== MAIN LOOP ====
+// ==== LOOP ====
 void loop() {
-  if(currentValue!=0){
-    unsigned long now = millis();
-    unsigned long elapsed = now - lastUpdate;
+  unsigned long now = millis();
 
-    if (elapsed >= durationLimit) {
-      currentValue = 0.0;
-      applyOutput(currentValue);
-    }
+  // 1) auto-zero if inactive
+  if (currentValue != 0 && (now - lastUpdate) >= DURATION_LIMIT) {
+    currentValue = 0.0;
+    applyOutput(currentValue);
   }
+
+  // 2) watchdog reboot
+  if ((now - lastUpdate) >= WATCHDOG_LIMIT) {
+    Serial.println("No BLE data for too long! Rebooting...");
+    ESP.restart();
+  }
+
   delay(100);
 }
