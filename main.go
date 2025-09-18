@@ -167,9 +167,9 @@ func processOSC(console *Console) {
 }
 
 func mapOSCValue(val float32) float32 {
-	mapped := 0.4 + val*0.6
-	if mapped < 0.4 {
-		mapped = 0.4
+	mapped := 0.8 + val*0.2
+	if mapped < 0.8 {
+		mapped = 0.8
 	}
 	return mapped
 }
