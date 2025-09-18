@@ -143,5 +143,7 @@ void loop() {
     ESP.restart();
   }
 
-  delay(100);
+  // --- Light sleep until next tick ---
+  esp_sleep_enable_timer_wakeup(1000 * 1000); // 1s
+  esp_light_sleep_start();
 }
