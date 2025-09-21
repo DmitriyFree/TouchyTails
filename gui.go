@@ -115,7 +115,7 @@ func buildDeviceUI(d *devicestore.Device, console *Console, store *devicestore.D
 			console.Append("Device offline, cannot beep: " + d.ID)
 			return
 		}
-		val := 0.4 + rand.Float64()*0.6
+		val := 0.8 + rand.Float64()*0.2
 		d.BLEPtr.Send(fmt.Sprintf("%.2f", val))
 		console.Append(fmt.Sprintf("Beep: %.2f for %s", val, d.ID))
 	}
