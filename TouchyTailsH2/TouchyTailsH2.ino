@@ -19,7 +19,7 @@ const unsigned long DURATION_LIMIT = 1000;   // stop output if no updates
 const unsigned long WATCHDOG_LIMIT = 10000;  // reboot if no messages
 
 // ==== STATE ====
-Adafruit_NeoPixel strip(NUM_LEDS, RGB_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel strip(NUM_LEDS, RGB_PIN);
 
 float currentValue = 0.0;      // current output value [0..1]
 unsigned long lastUpdate = 0;  // last valid BLE update
@@ -46,7 +46,6 @@ void applyOutput(float value) {
 
 void resetRGB() {
   strip.begin();
-  strip.setBrightness(50);
   strip.clear();
   strip.show();
 }
@@ -71,22 +70,12 @@ class CharacteristicCallbacks : public NimBLECharacteristicCallbacks {
   }
 } chrCallbacks;
 
-class ServerCallbacks : public NimBLEServerCallbacks {
-  void onDisconnect(NimBLEServer* s, NimBLEConnInfo& connInfo, int reason) override {
-    Serial.println("BLE disconnected! Forcing reboot...");
-    ESP.restart();
-  }
-} srvCallbacks;
-
 // ==== BLE INIT ====
 void initBLE() {
   NimBLEDevice::init(DEVICE_NAME);
 
   pServer = NimBLEDevice::createServer();
-  pServer->setCallbacks(&srvCallbacks);
-
   pService = pServer->createService(SERVICE_UUID);
-
   pCharacteristic = pService->createCharacteristic(
     CHARACTERISTIC_UUID,
     NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE |
@@ -107,24 +96,25 @@ void initBLE() {
 
   pAdvertising->start();
   Serial.println("BLE started, advertising...");
+  Serial.print("My address: ");
+  Serial.println(NimBLEDevice::getAddress().toString().c_str());
 }
 
-// ==== SETUP ====
-void setup() {
-  Serial.begin(115200);
-
-  initBLE();
-  resetRGB();
-
+void initPins(){
   pinMode(MOTOR_PIN, OUTPUT);
   pinMode(LED_PIN, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
 
   digitalWrite(MOTOR_PIN, LOW);
   digitalWrite(LED_PIN, LOW); // inverted idle
+}
 
-  Serial.print("My address: ");
-  Serial.println(NimBLEDevice::getAddress().toString().c_str());
+// ==== SETUP ====
+void setup() {
+  Serial.begin(115200);
+  initPins();
+  initBLE();
+  resetRGB();
 }
 
 // ==== LOOP ====
@@ -138,12 +128,12 @@ void loop() {
   }
 
   // 2) watchdog reboot
-  if ((now - lastUpdate) >= WATCHDOG_LIMIT) {
+  if (lastUpdate && ((now - lastUpdate) >= WATCHDOG_LIMIT)) {
     Serial.println("No BLE data for too long! Rebooting...");
     ESP.restart();
   }
 
   // --- Light sleep until next tick ---
-  esp_sleep_enable_timer_wakeup(1000 * 1000); // 1s
-  esp_light_sleep_start();
+  vTaskDelay(pdMS_TO_TICKS(100));
+  //delay(100);
 }
