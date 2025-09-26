@@ -22,9 +22,10 @@ type Device struct {
 	Event   string `json:"event"`
 
 	// Runtime-only
-	Online bool                   `json:"-"`
-	Status *canvas.Text           `json:"-"`
-	BLEPtr *blemanager.BLEManager `json:"-"`
+	Online     bool                   `json:"-"`
+	Status     *canvas.Text           `json:"-"`
+	BLEPtr     *blemanager.BLEManager `json:"-"`
+	LastOSCVal float32                `json:"-"` // <- new field
 }
 
 // DeviceStore manages devices with thread safety and persistence
@@ -61,6 +62,7 @@ func (s *DeviceStore) Load() error {
 		dev.Status = nil // GUI status will be assigned later
 		dev.Online = false
 		dev.BLEPtr = nil
+		dev.LastOSCVal = 0.0
 	}
 
 	return nil

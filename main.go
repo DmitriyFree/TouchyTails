@@ -148,16 +148,23 @@ func startRuntimeManagers(console *Console) {
 
 func processOSC(console *Console) {
 	for msg := range oscChan {
-		if msg.Value <= 0 {
-			continue
-		}
-		valueStr := fmt.Sprintf("%.2f", mapOSCValue(msg.Value))
-
 		for _, dev := range store.All() {
-
 			if !dev.Enabled || !dev.Online || dev.Event != msg.Name || dev.BLEPtr == nil {
 				continue
 			}
+
+			// Skip if both old and new values are 0
+			if msg.Value == 0 && dev.LastOSCVal == 0 {
+				continue
+			}
+
+			// Remember last value
+			dev.LastOSCVal = msg.Value
+
+			// Map and format
+			valueStr := fmt.Sprintf("%.2f", mapOSCValue(msg.Value))
+
+			// Send
 			dev.BLEPtr.Send(valueStr)
 			postGUI(func() {
 				console.append(fmt.Sprintf("%s: %s -> %s", dev.Name, dev.Event, valueStr))
