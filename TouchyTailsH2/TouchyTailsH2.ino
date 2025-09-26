@@ -53,7 +53,7 @@ void resetRGB() {
 // ==== BLE Event ====
 void handleData(const String& data) {
   float value = data.toFloat();
-  if (value <= 0) return; // ignore zeros
+  if (value < 0) return; // ignore negatives
   currentValue = constrain(value, 0, 1.0);
   lastUpdate = millis();
   applyOutput(currentValue);
