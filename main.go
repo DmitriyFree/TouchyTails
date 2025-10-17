@@ -38,6 +38,9 @@ func main() {
 	loadDevices(console, deviceListVBox)
 	startRuntimeManagers(console)
 
+	postGUI(func() { console.append("Running initial scan") })
+	go bleScan(console, deviceListVBox)
+
 	w.ShowAndRun()
 }
 
