@@ -20,6 +20,8 @@ import (
 	"gioui.org/widget/material"
 )
 
+var oscChan = make(chan oscmanager.OSCMessage, 1)
+
 type GUIState struct {
 	window      *app.Window
 	console     *Console
@@ -159,11 +161,6 @@ func (gui *GUIState) deviceList(gtx layout.Context, th *material.Theme) []layout
 	return children
 }
 
-//go:embed icon.png
-var iconData []byte
-var oscChan = make(chan oscmanager.OSCMessage, 1)
-var store = devicestore.New("devices.json")
-
 // ------------------- Load Devices -------------------
 
 func (gui *GUIState) loadDevices() {
@@ -203,35 +200,13 @@ func (gui *GUIState) bleScan() {
 	)
 }
 
-/*func addDeviceFromBLE(gui *GUIState, addrStr string) {
-	gui.console.append("Found device: " + addrStr)
-
-	var addr bluetooth.Address
-	addr.Set(addrStr)
-
-	if store.Exists(addrStr) {
-		gui.console.append("Device already exists, skipping: " + addrStr)
-		return
-	}
-
-	letter := devicestore.NextDeviceLetter(store)
-	dev := &devicestore.Device{
-		ID:      addrStr,
-		Name:    "Device " + letter,
-		Enabled: true,
-		Status:  "Pending",
-	}
-	store.Add(dev)
-	store.Save()
-}*/
-
 // ------------------- Runtime Managers -------------------
 
 func startRuntimeManagers(gui *GUIState) {
 	// BLE runtime manager
 	proxy := &GUIConsoleProxy{gui: gui}
 	runtimeMgr := devicestore.NewRuntimeManager(proxy)
-	runtimeMgr.Run(store)
+	runtimeMgr.Run(gui.store)
 
 	// OSC manager
 	oscMgr := oscmanager.New("127.0.0.1:9001", oscChan)
@@ -247,7 +222,7 @@ func startRuntimeManagers(gui *GUIState) {
 
 func processOSC(gui *GUIState) {
 	for msg := range oscChan {
-		for _, dev := range store.All() {
+		for _, dev := range gui.store.All() {
 			if !dev.Enabled || !dev.Online || dev.Event != msg.Name || dev.BLEPtr == nil {
 				continue
 			}
@@ -288,7 +263,16 @@ func (p *GUIConsoleProxy) Log(msg string) {
 }
 
 func (p *GUIConsoleProxy) SetStatus(dev *devicestore.Device, status string) {
-	msg := fmt.Sprintf("%s → %s", dev.Name, status)
-	p.gui.console.append(msg)
+	dev.Status = status
+	p.gui.console.append(fmt.Sprintf("%s → %s", dev.Name, status))
+
+	// Update corresponding DeviceUI if present
+	for _, du := range p.gui.deviceUIs {
+		if du.device.ID == dev.ID {
+			du.device.Status = status
+			break
+		}
+	}
+
 	p.gui.window.Invalidate()
 }

@@ -8,6 +8,8 @@ import (
 	"touchytails/devicestore"
 
 	"gioui.org/layout"
+	"gioui.org/op/clip"
+	"gioui.org/op/paint"
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
@@ -191,16 +193,16 @@ func layoutDevice(gtx layout.Context, th *material.Theme, du *DeviceUI, gui *GUI
 			}),
 
 			// Status column
-			layout.Flexed(0.2, func(gtx layout.Context) layout.Dimensions {
+			layout.Flexed(0.15, func(gtx layout.Context) layout.Dimensions {
 				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					lbl := material.Body1(th, du.status)
-					lbl.Color = getStatusColor(du.status)
+					lbl := material.Body1(th, du.device.Status)
+					lbl.Color = getStatusColor(du.device.Status)
 					lbl.TextSize = unit.Sp(14)
 					return lbl.Layout(gtx)
 				})
 			}),
 			// Enabled checkbox
-			layout.Flexed(0.15, func(gtx layout.Context) layout.Dimensions {
+			layout.Flexed(0.10, func(gtx layout.Context) layout.Dimensions {
 				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					chk := material.CheckBox(th, &du.enabledBtn, "")
 					chk.Color = color.NRGBA{255, 255, 255, 255}
@@ -211,14 +213,23 @@ func layoutDevice(gtx layout.Context, th *material.Theme, du *DeviceUI, gui *GUI
 					return d
 				})
 			}),
-			// Event editor
 			layout.Flexed(0.15, func(gtx layout.Context) layout.Dimensions {
 				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					ed := material.Editor(th, &du.eventEditor, "")
+					ed := material.Editor(th, &du.eventEditor, "Event name...")
 					ed.Color = color.NRGBA{255, 255, 255, 255}
+					ed.Hint = "-Event-"
+					ed.HintColor = color.NRGBA{150, 150, 150, 255}
+
+					// Add min width and optional background
+					minW := gtx.Dp(unit.Dp(100))
+					if gtx.Constraints.Min.X < minW {
+						gtx.Constraints.Min.X = minW
+					}
+					paint.FillShape(gtx.Ops, color.NRGBA{R: 40, G: 40, B: 40, A: 255},
+						clip.Rect{Max: gtx.Constraints.Min}.Op())
+
 					d := ed.Layout(gtx)
 
-					// Update device name ONLY if changed
 					newEvent := du.eventEditor.Text()
 					if newEvent != du.device.Event {
 						du.device.Event = newEvent
