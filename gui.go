@@ -63,16 +63,17 @@ func (c *Console) append(line string) {
 
 // --- Device UI helpers for Gio ---
 type DeviceUI struct {
-	idLabel    string
-	name       string
-	nameEditor widget.Editor
-	event      string
-	status     string
-	enabled    bool
-	beepBtn    widget.Clickable
-	enabledBtn widget.Bool
-	removeBtn  widget.Clickable
-	device     *devicestore.Device
+	idLabel     string
+	name        string
+	nameEditor  widget.Editor
+	event       string
+	eventEditor widget.Editor
+	status      string
+	enabled     bool
+	beepBtn     widget.Clickable
+	enabledBtn  widget.Bool
+	removeBtn   widget.Clickable
+	device      *devicestore.Device
 }
 
 func newDeviceUI(d *devicestore.Device) *DeviceUI {
@@ -92,6 +93,9 @@ func newDeviceUI(d *devicestore.Device) *DeviceUI {
 	// Initialize editor and checkbox
 	du.nameEditor = widget.Editor{SingleLine: true}
 	du.nameEditor.SetText(d.Name)
+
+	du.eventEditor = widget.Editor{SingleLine: true}
+	du.eventEditor.SetText(d.Event)
 
 	du.enabledBtn = widget.Bool{Value: d.Enabled}
 
@@ -169,7 +173,7 @@ func layoutDevice(gtx layout.Context, th *material.Theme, du *DeviceUI, gui *GUI
 				})
 			}),
 			// Name editor
-			layout.Flexed(0.2, func(gtx layout.Context) layout.Dimensions {
+			layout.Flexed(0.15, func(gtx layout.Context) layout.Dimensions {
 				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					ed := material.Editor(th, &du.nameEditor, "")
 					ed.Color = color.NRGBA{255, 255, 255, 255}
@@ -186,18 +190,6 @@ func layoutDevice(gtx layout.Context, th *material.Theme, du *DeviceUI, gui *GUI
 				})
 			}),
 
-			// Enabled checkbox
-			layout.Flexed(0.15, func(gtx layout.Context) layout.Dimensions {
-				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					chk := material.CheckBox(th, &du.enabledBtn, "Enabled")
-					chk.Color = color.NRGBA{255, 255, 255, 255}
-					d := chk.Layout(gtx)
-					if du.device.Enabled != du.enabledBtn.Value {
-						du.onToggleEnabled(du.enabledBtn.Value, gui)
-					}
-					return d
-				})
-			}),
 			// Status column
 			layout.Flexed(0.2, func(gtx layout.Context) layout.Dimensions {
 				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -207,8 +199,37 @@ func layoutDevice(gtx layout.Context, th *material.Theme, du *DeviceUI, gui *GUI
 					return lbl.Layout(gtx)
 				})
 			}),
-			// Beep button
+			// Enabled checkbox
 			layout.Flexed(0.15, func(gtx layout.Context) layout.Dimensions {
+				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					chk := material.CheckBox(th, &du.enabledBtn, "")
+					chk.Color = color.NRGBA{255, 255, 255, 255}
+					d := chk.Layout(gtx)
+					if du.device.Enabled != du.enabledBtn.Value {
+						du.onToggleEnabled(du.enabledBtn.Value, gui)
+					}
+					return d
+				})
+			}),
+			// Event editor
+			layout.Flexed(0.15, func(gtx layout.Context) layout.Dimensions {
+				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					ed := material.Editor(th, &du.eventEditor, "")
+					ed.Color = color.NRGBA{255, 255, 255, 255}
+					d := ed.Layout(gtx)
+
+					// Update device name ONLY if changed
+					newEvent := du.eventEditor.Text()
+					if newEvent != du.device.Event {
+						du.device.Event = newEvent
+						gui.store.Save()
+					}
+
+					return d
+				})
+			}),
+			// Beep button
+			layout.Flexed(0.10, func(gtx layout.Context) layout.Dimensions {
 				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return material.Button(th, &du.beepBtn, "Beep").Layout(gtx)
 				})

@@ -32,7 +32,9 @@ type GUIState struct {
 func main() {
 	go func() {
 		window := new(app.Window)
-		window.Option(app.Title("Touchy Tails"))
+		window.Option(
+			app.Title("Touchy Tails"),
+		)
 
 		gui := &GUIState{
 			window:  window,
@@ -86,8 +88,9 @@ func drawUI(gtx layout.Context, th *material.Theme, gui *GUIState) layout.Dimens
 				layout.Flexed(0.2, centeredCaption(th, "ID", color.NRGBA{200, 220, 255, 255})),
 				layout.Flexed(0.15, centeredCaption(th, "Name", color.NRGBA{200, 220, 255, 255})),
 				layout.Flexed(0.15, centeredCaption(th, "Status", color.NRGBA{200, 220, 255, 255})),
-				layout.Flexed(0.2, centeredCaption(th, "Enabled", color.NRGBA{200, 220, 255, 255})),
-				layout.Flexed(0.15, centeredCaption(th, "Beep", color.NRGBA{200, 220, 255, 255})),
+				layout.Flexed(0.10, centeredCaption(th, "Enabled", color.NRGBA{200, 220, 255, 255})),
+				layout.Flexed(0.15, centeredCaption(th, "Event", color.NRGBA{200, 220, 255, 255})),
+				layout.Flexed(0.10, centeredCaption(th, "Beep", color.NRGBA{200, 220, 255, 255})),
 				layout.Flexed(0.15, centeredCaption(th, "Remove", color.NRGBA{200, 220, 255, 255})),
 			)
 		}),
