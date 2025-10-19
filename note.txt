@@ -1,0 +1,2 @@
+-Compile like that:
+go build -ldflags="-H=windowsgui" -o .
