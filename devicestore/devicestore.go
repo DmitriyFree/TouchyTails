@@ -7,8 +7,6 @@ import (
 	"sync"
 
 	"touchytails/blemanager"
-
-	"fyne.io/fyne/v2/canvas"
 )
 
 // Device represents a BLE device.
@@ -23,7 +21,7 @@ type Device struct {
 
 	// Runtime-only
 	Online     bool                   `json:"-"`
-	Status     *canvas.Text           `json:"-"`
+	Status     string                 `json:"-"`
 	BLEPtr     *blemanager.BLEManager `json:"-"`
 	LastOSCVal float32                `json:"-"` // <- new field
 }
@@ -59,7 +57,7 @@ func (s *DeviceStore) Load() error {
 
 	// Initialize runtime fields
 	for _, dev := range s.devices {
-		dev.Status = nil // GUI status will be assigned later
+		dev.Status = "" // GUI status will be assigned later
 		dev.Online = false
 		dev.BLEPtr = nil
 		dev.LastOSCVal = 0.0
@@ -107,6 +105,10 @@ func (s *DeviceStore) Add(dev *Device) {
 
 // Remove deletes a device by ID
 func (s *DeviceStore) Remove(id string) {
+	if id == "" {
+		fmt.Println("WARNING: Remove called with empty ID")
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -121,7 +123,7 @@ func (s *DeviceStore) Remove(id string) {
 				d.BLEPtr = nil
 			}
 			d.Online = false
-			d.Status = nil
+			d.Status = ""
 		}
 	}
 	s.devices = newDevices

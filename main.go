@@ -3,114 +3,211 @@ package main
 import (
 	_ "embed"
 	"fmt"
+	"image/color"
+	"log"
+	"os"
 	"time"
 	"touchytails/blemanager"
 	"touchytails/devicestore"
 	"touchytails/oscmanager"
 
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/widget"
-	"tinygo.org/x/bluetooth"
+	"gioui.org/app"
+	"gioui.org/layout"
+	"gioui.org/op"
+	"gioui.org/op/paint"
+	"gioui.org/unit"
+	"gioui.org/widget"
+	"gioui.org/widget/material"
 )
+
+type GUIState struct {
+	window      *app.Window
+	console     *Console
+	deviceUIs   []*DeviceUI
+	discoverBtn widget.Clickable
+	consoleList widget.List
+	store       *devicestore.DeviceStore
+}
+
+func main() {
+	go func() {
+		window := new(app.Window)
+		window.Option(app.Title("Touchy Tails"))
+
+		gui := &GUIState{
+			window:  window,
+			console: newConsole(200),
+			store:   devicestore.New("devices.json"),
+		}
+
+		if err := run(window, gui); err != nil {
+			log.Fatal(err)
+		}
+		os.Exit(0)
+	}()
+	app.Main()
+}
+
+func run(w *app.Window, gui *GUIState) error {
+	th := material.NewTheme()
+
+	gui.console.append("Running initial scan")
+	gui.window.Invalidate()
+
+	// Start background processes safely
+	go gui.bleScan()
+	go gui.loadDevices()
+	go startRuntimeManagers(gui)
+
+	var ops op.Ops
+	gui.consoleList.Axis = layout.Vertical
+
+	for {
+		switch e := w.Event().(type) {
+		case app.DestroyEvent:
+			return e.Err
+		case app.FrameEvent:
+			gtx := app.NewContext(&ops, e)
+			// fill background first
+			paint.Fill(gtx.Ops, color.NRGBA{R: 20, G: 20, B: 20, A: 255}) // dark gray
+			drawUI(gtx, th, gui)
+			e.Frame(gtx.Ops)
+		}
+	}
+}
+
+func drawUI(gtx layout.Context, th *material.Theme, gui *GUIState) layout.Dimensions {
+	inset := layout.UniformInset(unit.Dp(8))
+
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		// Table header
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+				layout.Flexed(0.2, centeredCaption(th, "ID", color.NRGBA{200, 220, 255, 255})),
+				layout.Flexed(0.15, centeredCaption(th, "Name", color.NRGBA{200, 220, 255, 255})),
+				layout.Flexed(0.15, centeredCaption(th, "Status", color.NRGBA{200, 220, 255, 255})),
+				layout.Flexed(0.2, centeredCaption(th, "Enabled", color.NRGBA{200, 220, 255, 255})),
+				layout.Flexed(0.15, centeredCaption(th, "Beep", color.NRGBA{200, 220, 255, 255})),
+				layout.Flexed(0.15, centeredCaption(th, "Remove", color.NRGBA{200, 220, 255, 255})),
+			)
+		}),
+
+		// Device rows
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx, gui.deviceList(gtx, th)...)
+		}),
+
+		// Spacer (pushes next widgets to bottom)
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			return layout.Dimensions{Size: gtx.Constraints.Min}
+		}),
+
+		// Discover button
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			btn := material.Button(th, &gui.discoverBtn, "Discover Devices")
+			if gui.discoverBtn.Clicked(gtx) {
+				gui.console.append("Discovery triggered")
+				go gui.bleScan()
+			}
+			return inset.Layout(gtx, btn.Layout)
+		}),
+
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			const consoleHeight = 200 // height in dp
+			margin := unit.Dp(8)      // margin around console
+
+			// Force fixed height
+			gtx.Constraints.Min.Y = gtx.Dp(consoleHeight)
+			gtx.Constraints.Max.Y = gtx.Dp(consoleHeight)
+
+			// Add margin
+			inset := layout.UniformInset(margin)
+			return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				// Draw scrollable console lines
+				return material.List(th, &gui.consoleList).Layout(gtx, len(gui.console.lines), func(gtx layout.Context, i int) layout.Dimensions {
+					lbl := material.Body2(th, gui.console.lines[i])
+					lbl.Color = color.NRGBA{200, 200, 200, 255}
+					lbl.TextSize = unit.Sp(12)
+					return lbl.Layout(gtx)
+				})
+			})
+		}),
+	)
+}
+
+func centeredCaption(th *material.Theme, text string, col color.NRGBA) func(gtx layout.Context) layout.Dimensions {
+	return func(gtx layout.Context) layout.Dimensions {
+		lbl := material.Caption(th, text)
+		lbl.Color = col
+		lbl.TextSize = unit.Sp(16)
+		// center horizontally
+		return layout.Center.Layout(gtx, lbl.Layout)
+	}
+}
+
+func (gui *GUIState) deviceList(gtx layout.Context, th *material.Theme) []layout.FlexChild {
+	children := make([]layout.FlexChild, 0, len(gui.deviceUIs))
+	for _, du := range gui.deviceUIs {
+		du := du // capture a new variable for this closure
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layoutDevice(gtx, th, du, gui)
+		}))
+	}
+	return children
+}
 
 //go:embed icon.png
 var iconData []byte
-
-var guiChan = make(chan func(), 50)
 var oscChan = make(chan oscmanager.OSCMessage, 1)
 var store = devicestore.New("devices.json")
 
-func main() {
-	a := app.New()
-	w := a.NewWindow("Touchy Tails")
-	setupIcons(a, w)
+// ------------------- Load Devices -------------------
 
-	console := newConsole(100)
-	deviceListVBox := container.NewVBox()
-	setupGUI(w, console, deviceListVBox)
-
-	loadDevices(console, deviceListVBox)
-	startRuntimeManagers(console)
-
-	//run initial scan
-	postGUI(func() { console.append("Running initial scan") })
-	go bleScan(console, deviceListVBox)
-
-	w.ShowAndRun()
-}
-
-// ------------------- Initialization Helpers -------------------
-
-func setupIcons(a fyne.App, w fyne.Window) {
-	iconRes := fyne.NewStaticResource("icon.png", iconData)
-	a.SetIcon(iconRes)
-	w.SetIcon(iconRes)
-}
-
-func setupGUI(w fyne.Window, console *Console, deviceListVBox *fyne.Container) {
-
-	discoverBtn := widget.NewButton("Discover Devices", func() {
-		postGUI(func() { console.append("Discovery triggered") })
-		go bleScan(console, deviceListVBox)
-	})
-
-	consoleScroll := container.NewVScroll(console.widget)
-	consoleScroll.SetMinSize(fyne.NewSize(0, 200))
-
-	deviceListScroll := container.NewVScroll(deviceListVBox)
-	deviceListScroll.SetMinSize(fyne.NewSize(0, 300))
-
-	buttonBox := container.NewHBox(discoverBtn)
-
-	mainUI := container.NewVBox(
-		deviceListScroll,
-		buttonBox, // <- add the button here
-		consoleScroll,
-	)
-	w.SetContent(mainUI)
-	w.Resize(fyne.NewSize(800, 550))
-}
-
-// ------------------- Device Loading -------------------
-
-func loadDevices(console *Console, deviceListVBox *fyne.Container) {
-	if err := store.Load(); err != nil {
-		postGUI(func() { console.append("Failed to load devices: " + err.Error()) })
+func (gui *GUIState) loadDevices() {
+	if err := gui.store.Load(); err != nil {
+		gui.console.append("Failed to load devices: " + err.Error())
 	}
 
-	// Normalize IDs (migration)
-	for _, dev := range store.All() {
-		dev.Status = newStatus("Pending")
-		dev.Status.Alignment = fyne.TextAlignCenter
+	gui.deviceUIs = nil
+	for _, d := range gui.store.All() {
+		du := newDeviceUI(d)
+		gui.deviceUIs = append(gui.deviceUIs, du)
 	}
-	store.Save()
-
-	postGUI(func() {
-		console.append(fmt.Sprintf("Loaded %d devices", len(store.All())))
-	})
-	refreshDevices(deviceListVBox, console, store)
+	gui.console.append(fmt.Sprintf("Loaded %d devices", len(gui.deviceUIs)))
 }
 
 // ------------------- BLE Discovery -------------------
-
-func bleScan(console *Console, deviceListVBox *fyne.Container) {
+func (gui *GUIState) bleScan() {
 	ble := blemanager.New()
 	ble.ScanDevice("TouchyTails", 5*time.Second,
-		func(msg string) { postGUI(func() { console.append(msg) }) },
-		func(addrStr string) { addDeviceFromBLE(console, deviceListVBox, addrStr) },
+		func(msg string) {
+			gui.console.append(msg)
+			gui.window.Invalidate()
+		},
+		func(addr string) {
+			gui.console.append("Found " + addr)
+			dev := &devicestore.Device{
+				ID:      addr,
+				Name:    "Device " + devicestore.NextDeviceLetter(gui.store),
+				Enabled: true,
+				Status:  "Pending",
+			}
+			gui.store.Add(dev)
+			gui.store.Save()
+			gui.loadDevices()
+			gui.window.Invalidate()
+		},
 	)
 }
 
-func addDeviceFromBLE(console *Console, deviceListVBox *fyne.Container, addrStr string) {
-	postGUI(func() { console.append("Found device: " + addrStr) })
+/*func addDeviceFromBLE(gui *GUIState, addrStr string) {
+	gui.console.append("Found device: " + addrStr)
 
 	var addr bluetooth.Address
 	addr.Set(addrStr)
 
 	if store.Exists(addrStr) {
-		postGUI(func() { console.append("Device already exists, skipping: " + addrStr) })
+		gui.console.append("Device already exists, skipping: " + addrStr)
 		return
 	}
 
@@ -119,40 +216,33 @@ func addDeviceFromBLE(console *Console, deviceListVBox *fyne.Container, addrStr 
 		ID:      addrStr,
 		Name:    "Device " + letter,
 		Enabled: true,
-		Status:  newStatus("Pending"),
+		Status:  "Pending",
 	}
 	store.Add(dev)
 	store.Save()
-	refreshDevices(deviceListVBox, console, store)
-}
+}*/
 
 // ------------------- Runtime Managers -------------------
 
-func startRuntimeManagers(console *Console) {
+func startRuntimeManagers(gui *GUIState) {
 	// BLE runtime manager
-	runtimeMgr := devicestore.NewRuntimeManager(console)
+	proxy := &GUIConsoleProxy{gui: gui}
+	runtimeMgr := devicestore.NewRuntimeManager(proxy)
 	runtimeMgr.Run(store)
 
 	// OSC manager
 	oscMgr := oscmanager.New("127.0.0.1:9001", oscChan)
 	go oscMgr.Run(func(msg string) {
-		console.append(msg)
+		gui.console.append(msg)
 	})
 
 	// OSC processor
-	go processOSC(console)
-
-	// GUI updater
-	go func() {
-		for job := range guiChan {
-			job()
-		}
-	}()
+	go processOSC(gui)
 }
 
 // ------------------- OSC Handling -------------------
 
-func processOSC(console *Console) {
+func processOSC(gui *GUIState) {
 	for msg := range oscChan {
 		for _, dev := range store.All() {
 			if !dev.Enabled || !dev.Online || dev.Event != msg.Name || dev.BLEPtr == nil {
@@ -172,9 +262,7 @@ func processOSC(console *Console) {
 
 			// Send
 			dev.BLEPtr.Send(valueStr)
-			postGUI(func() {
-				console.append(fmt.Sprintf("%s: %s -> %s", dev.Name, dev.Event, valueStr))
-			})
+			gui.console.append(fmt.Sprintf("%s: %s -> %s", dev.Name, dev.Event, valueStr))
 		}
 	}
 }
@@ -185,4 +273,19 @@ func mapOSCValue(val float32) float32 {
 		mapped = 0.8
 	}
 	return mapped
+}
+
+type GUIConsoleProxy struct {
+	gui *GUIState
+}
+
+func (p *GUIConsoleProxy) Log(msg string) {
+	p.gui.console.append(msg)
+	p.gui.window.Invalidate()
+}
+
+func (p *GUIConsoleProxy) SetStatus(dev *devicestore.Device, status string) {
+	msg := fmt.Sprintf("%s → %s", dev.Name, status)
+	p.gui.console.append(msg)
+	p.gui.window.Invalidate()
 }

@@ -1,21 +1,20 @@
-// gui.go
 package main
 
 import (
 	"fmt"
 	"image/color"
-	"math/rand/v2"
-	"strings"
+	"math/rand"
+	"time"
 	"touchytails/devicestore"
 
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/widget"
+	"gioui.org/layout"
+	"gioui.org/unit"
+	"gioui.org/widget"
+	"gioui.org/widget/material"
 )
 
 // --- Status handling ---
-var statusColors = map[string]color.RGBA{
+var statusColors = map[string]color.NRGBA{
 	"Online":      {0, 200, 0, 255},
 	"Offline":     {200, 0, 0, 255},
 	"Malfunction": {200, 100, 0, 255},
@@ -23,185 +22,204 @@ var statusColors = map[string]color.RGBA{
 	"Pending":     {200, 200, 200, 255},
 }
 
-// Creates a new status label
-func newStatus(text string) *canvas.Text {
-	col := statusColors[text]
-	txt := canvas.NewText(text, col)
-	txt.TextSize = 14
-	txt.Alignment = fyne.TextAlignCenter
-	return txt
-}
-
-// Updates status label safely
-func applyStatus(label *canvas.Text, text string) {
-	if label == nil {
-		return
-	}
-	col, ok := statusColors[text]
+// Get status color
+func getStatusColor(status string) color.NRGBA {
+	col, ok := statusColors[status]
 	if !ok {
 		col = statusColors["Pending"]
 	}
-	label.Text = text
-	label.Color = col
-	label.Alignment = fyne.TextAlignCenter
-	label.Refresh()
-}
-
-// --- GUI posting helper ---
-func postGUI(job func()) {
-	guiChan <- func() { fyne.Do(job) }
+	return col
 }
 
 // --- Console handling ---
 type Console struct {
-	widget *widget.Entry
-	limit  int
+	lines []string
+	limit int
+	List  widget.List // for scrolling
 }
 
 func newConsole(limit int) *Console {
-	c := &Console{
-		widget: widget.NewMultiLineEntry(),
-		limit:  limit,
+	return &Console{
+		lines: nil,
+		limit: limit,
+		List:  widget.List{List: layout.List{Axis: layout.Vertical}},
 	}
-	c.widget.SetPlaceHolder("Console output...")
-	c.widget.Wrapping = fyne.TextWrapWord
-	c.widget.Disable()
-	return c
 }
 
-// Append text safely to console
 func (c *Console) append(line string) {
-	lines := strings.Split(c.widget.Text, "\n")
-	lines = append(lines, line)
-	if len(lines) > c.limit {
-		lines = lines[len(lines)-c.limit:]
+	// Prepend timestamp
+	timestamp := time.Now().Format("15:04:05") // HH:MM:SS
+	line = fmt.Sprintf("[%s] %s", timestamp, line)
+
+	// Add to top of slice (newest first)
+	c.lines = append([]string{line}, c.lines...)
+	if len(c.lines) > c.limit {
+		c.lines = c.lines[:c.limit]
 	}
-	postGUI(func() { c.widget.SetText(strings.Join(lines, "\n")) })
-	c.widget.CursorRow = len(lines)
+
+	// Auto-scroll to bottom (newest last)
+	c.List.Position.First = len(c.lines)
 }
 
-// Public method to append via GUI safely
-func (c *Console) Append(line string) {
-	postGUI(func() { c.append(line) })
+// --- Device UI helpers for Gio ---
+type DeviceUI struct {
+	idLabel    string
+	name       string
+	nameEditor widget.Editor
+	event      string
+	status     string
+	enabled    bool
+	beepBtn    widget.Clickable
+	enabledBtn widget.Bool
+	removeBtn  widget.Clickable
+	device     *devicestore.Device
 }
 
-// Apply status change to device via GUI
-func (c *Console) ApplyStatus(dev *devicestore.Device, status string) {
-	postGUI(func() { applyStatus(dev.Status, status) })
-}
-
-// --- Device UI ---
-func buildDeviceUI(d *devicestore.Device, console *Console, store *devicestore.DeviceStore, refreshDevices func()) *fyne.Container {
-	// --- Labels & Entries ---
-	if d.Status == nil {
-		d.Status = newStatus("Pending")
+func newDeviceUI(d *devicestore.Device) *DeviceUI {
+	if d.Status == "" {
+		d.Status = "Pending"
 	}
-	idLabel := canvas.NewText(d.ID, color.White)
-	idLabel.TextSize = 6
-	idLabel.Alignment = fyne.TextAlignCenter
-	idLabel.Resize(fyne.NewSize(50, 20))
 
-	nameEntry := widget.NewEntry()
-	nameEntry.SetText(d.Name)
+	du := &DeviceUI{
+		idLabel: d.ID,
+		name:    d.Name,
+		event:   d.Event,
+		status:  d.Status,
+		enabled: d.Enabled,
+		device:  d,
+	}
 
-	eventEntry := widget.NewEntry()
-	eventEntry.SetText(d.Event)
+	// Initialize editor and checkbox
+	du.nameEditor = widget.Editor{SingleLine: true}
+	du.nameEditor.SetText(d.Name)
 
-	statusLabel := d.Status
+	du.enabledBtn = widget.Bool{Value: d.Enabled}
 
-	// --- Handlers ---
-	onBeep := func() {
-		if d.BLEPtr == nil || !d.Online {
-			console.Append("Device offline, cannot beep: " + d.ID)
-			return
+	return du
+}
+
+// --- BLE & UI actions ---
+func (du *DeviceUI) onBeep(gui *GUIState) {
+	if du.device.BLEPtr == nil || !du.device.Online {
+		gui.console.append("Device offline, cannot beep: " + du.device.ID)
+		return
+	}
+	val := mapOSCValue(rand.Float32())
+	du.device.BLEPtr.Send(fmt.Sprintf("%.2f", val))
+	gui.console.append(fmt.Sprintf("Beep: %.2f for %s", val, du.device.ID))
+}
+
+func (du *DeviceUI) onToggleEnabled(enabled bool, gui *GUIState) {
+	du.device.Enabled = enabled
+	gui.store.Save()
+	if !enabled {
+		if du.device.BLEPtr != nil {
+			du.device.BLEPtr.Disconnect()
+			du.device.BLEPtr = nil
 		}
-		val := 0.4 + rand.Float64()*0.6
-		d.BLEPtr.Send(fmt.Sprintf("%.2f", val))
-		console.Append(fmt.Sprintf("Beep: %.2f for %s", val, d.ID))
+		du.status = "Disabled"
+	} else if du.device.Online {
+		du.status = "Online"
+	} else {
+		du.status = "Pending"
 	}
-
-	onToggleEnabled := func(enabled bool) {
-		d.Enabled = enabled
-		store.Save()
-		postGUI(func() {
-			if !d.Enabled {
-				if d.BLEPtr != nil {
-					d.BLEPtr.Disconnect()
-					d.BLEPtr = nil
-				}
-				applyStatus(statusLabel, "Disabled")
-			} else if d.Online {
-				applyStatus(statusLabel, "Online")
-			} else {
-				applyStatus(statusLabel, "Pending")
-			}
-			console.Append(fmt.Sprintf("%s for %s", statusLabel.Text, d.ID))
-		})
-	}
-
-	onRemove := func() {
-		d.Enabled = false
-		if d.BLEPtr != nil {
-			d.BLEPtr.Disconnect()
-			d.BLEPtr = nil
-		}
-		store.Remove(d.ID)
-		refreshDevices()
-	}
-
-	onNameChanged := func(newName string) {
-		d.Name = newName
-		store.Save()
-		console.Append("Name updated for " + d.ID)
-	}
-
-	onEventChanged := func(newEvent string) {
-		d.Event = newEvent
-		store.Save()
-		console.Append("Event updated for " + d.ID)
-	}
-
-	// --- Widgets ---
-	beepBtn := widget.NewButton("Beep", onBeep)
-	enabledCheck := widget.NewCheck("Enabled", onToggleEnabled)
-	enabledCheck.SetChecked(d.Enabled)
-	nameEntry.OnChanged = onNameChanged
-	eventEntry.OnChanged = onEventChanged
-	removeBtn := widget.NewButton("Remove", onRemove)
-
-	// --- Layout ---
-	row := container.NewGridWithColumns(7,
-		idLabel, nameEntry, statusLabel, beepBtn, enabledCheck, eventEntry, removeBtn,
-	)
-
-	return container.NewBorder(nil, nil, nil, nil, row)
+	gui.console.append(fmt.Sprintf("%s for %s", du.status, du.device.ID))
 }
 
-// Refresh the device list
-func refreshDevices(deviceList *fyne.Container, console *Console, store *devicestore.DeviceStore) {
-	postGUI(func() {
-		deviceList.Objects = nil
+func (du *DeviceUI) onRemove(gui *GUIState, store *devicestore.DeviceStore) {
+	du.device.Enabled = false
+	if du.device.BLEPtr != nil {
+		du.device.BLEPtr.Disconnect()
+		du.device.BLEPtr = nil
+	}
+	store.Remove(du.device.ID) // remove from the store
+	gui.refreshDevices()       // refresh only from the same store
+	gui.console.append(fmt.Sprintf("Removed device %s", du.device.ID))
+}
+func (gui *GUIState) refreshDevices() {
+	gui.deviceUIs = nil
+	for _, d := range gui.store.All() { // use gui.store, not some other store
+		du := newDeviceUI(d)
+		gui.deviceUIs = append(gui.deviceUIs, du)
+	}
+}
 
-		// Header
-		header := container.NewGridWithColumns(7,
-			widget.NewLabelWithStyle("ID", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-			widget.NewLabelWithStyle("Name", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-			widget.NewLabelWithStyle("Status", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-			widget.NewLabelWithStyle("Beep", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-			widget.NewLabelWithStyle("Enabled", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-			widget.NewLabelWithStyle("Event", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-			widget.NewLabelWithStyle("Remove", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+// --- Build device UI frame ---
+func layoutDevice(gtx layout.Context, th *material.Theme, du *DeviceUI, gui *GUIState) layout.Dimensions {
+
+	inset := layout.UniformInset(unit.Dp(4))
+
+	// Handle button clicks
+	if du.beepBtn.Clicked(gtx) {
+		du.onBeep(gui)
+	}
+	if du.removeBtn.Clicked(gtx) {
+		du.onRemove(gui, gui.store)
+	}
+
+	return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+			// ID column
+			layout.Flexed(0.2, func(gtx layout.Context) layout.Dimensions {
+				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Body1(th, du.idLabel)
+					lbl.Color = color.NRGBA{255, 255, 255, 255}
+					lbl.TextSize = unit.Sp(8)
+					return lbl.Layout(gtx)
+				})
+			}),
+			// Name editor
+			layout.Flexed(0.2, func(gtx layout.Context) layout.Dimensions {
+				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					ed := material.Editor(th, &du.nameEditor, "")
+					ed.Color = color.NRGBA{255, 255, 255, 255}
+					d := ed.Layout(gtx)
+
+					// Update device name ONLY if changed
+					newName := du.nameEditor.Text()
+					if newName != du.device.Name {
+						du.device.Name = newName
+						gui.store.Save()
+					}
+
+					return d
+				})
+			}),
+
+			// Enabled checkbox
+			layout.Flexed(0.15, func(gtx layout.Context) layout.Dimensions {
+				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					chk := material.CheckBox(th, &du.enabledBtn, "Enabled")
+					chk.Color = color.NRGBA{255, 255, 255, 255}
+					d := chk.Layout(gtx)
+					if du.device.Enabled != du.enabledBtn.Value {
+						du.onToggleEnabled(du.enabledBtn.Value, gui)
+					}
+					return d
+				})
+			}),
+			// Status column
+			layout.Flexed(0.2, func(gtx layout.Context) layout.Dimensions {
+				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Body1(th, du.status)
+					lbl.Color = getStatusColor(du.status)
+					lbl.TextSize = unit.Sp(14)
+					return lbl.Layout(gtx)
+				})
+			}),
+			// Beep button
+			layout.Flexed(0.15, func(gtx layout.Context) layout.Dimensions {
+				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return material.Button(th, &du.beepBtn, "Beep").Layout(gtx)
+				})
+			}),
+			// Remove button
+			layout.Flexed(0.15, func(gtx layout.Context) layout.Dimensions {
+				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return material.Button(th, &du.removeBtn, "Remove").Layout(gtx)
+				})
+
+			}),
 		)
-		deviceList.Add(header)
-
-		// Device rows
-		for _, d := range store.All() {
-			if d.Status == nil {
-				d.Status = newStatus("Pending")
-			}
-			deviceList.Add(buildDeviceUI(d, console, store, func() { refreshDevices(deviceList, console, store) }))
-		}
-
-		deviceList.Refresh()
 	})
 }

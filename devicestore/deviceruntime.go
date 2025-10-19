@@ -9,27 +9,29 @@ import (
 	"touchytails/blemanager"
 )
 
+// RuntimeManager continuously manages BLE connections for enabled devices.
 type RuntimeManager struct {
-	console guiConsole // interface to send GUI updates
+	console ConsoleProxy // interface for logging and status updates
 	active  map[string]struct{}
 	mu      sync.Mutex
 }
 
-// guiConsole is minimal interface for RunBLEManagers
-type guiConsole interface {
-	Append(msg string)
-	ApplyStatus(dev *Device, status string)
+// ConsoleProxy is a minimal interface between the runtime and the GUI.
+// The main app implements this to safely update Gio UI state.
+type ConsoleProxy interface {
+	Log(msg string)                       // append text to GUI console
+	SetStatus(dev *Device, status string) // update device status text
 }
 
-// NewRuntimeManager creates a new runtime BLE manager for devices
-func NewRuntimeManager(console guiConsole) *RuntimeManager {
+// NewRuntimeManager creates a new runtime BLE manager.
+func NewRuntimeManager(console ConsoleProxy) *RuntimeManager {
 	return &RuntimeManager{
 		console: console,
 		active:  make(map[string]struct{}),
 	}
 }
 
-// Run starts BLE management loop
+// Run periodically checks all devices in the store and starts managers for enabled ones.
 func (rm *RuntimeManager) Run(store *DeviceStore) {
 	go func() {
 		for {
@@ -47,7 +49,6 @@ func (rm *RuntimeManager) Run(store *DeviceStore) {
 				rm.active[dev.ID] = struct{}{}
 				rm.mu.Unlock()
 
-				// Start device management
 				go rm.manageDevice(store, dev)
 			}
 			time.Sleep(3 * time.Second)
@@ -55,7 +56,7 @@ func (rm *RuntimeManager) Run(store *DeviceStore) {
 	}()
 }
 
-// manageDevice handles connection/heartbeat for a single device
+// manageDevice handles the BLE connection lifecycle for a single device.
 func (rm *RuntimeManager) manageDevice(store *DeviceStore, dev *Device) {
 	defer func() {
 		rm.mu.Lock()
@@ -63,25 +64,24 @@ func (rm *RuntimeManager) manageDevice(store *DeviceStore, dev *Device) {
 		rm.mu.Unlock()
 	}()
 
-	ble := blemanager.New()
-	store.SetBLE(dev.ID, ble)
+	rm.console.Log(fmt.Sprintf("Managing device %s (%s)", dev.Name, dev.ID))
 
 	for store.IsEnabled(dev.ID) {
-		rm.console.Append(fmt.Sprintf("Scanning/connecting to %s (%s)...", dev.Name, dev.ID))
+		rm.console.Log(fmt.Sprintf("Connecting to %s...", dev.Name))
 
-		ble := blemanager.New() // <-- create a fresh one each attempt
+		ble := blemanager.New()
 		store.SetBLE(dev.ID, ble)
 
 		if err := ble.ConnectDevice(dev.ID); err != nil {
-			rm.console.Append(fmt.Sprintf("Failed to connect %s: %v", dev.Name, err))
-			store.ClearBLE(dev.ID) // cleanup reference
+			rm.console.Log(fmt.Sprintf("Failed to connect %s: %v", dev.Name, err))
+			store.ClearBLE(dev.ID)
 			time.Sleep(5 * time.Second)
 			continue
 		}
 
-		rm.console.Append(fmt.Sprintf("%s connected!", dev.Name))
+		rm.console.Log(fmt.Sprintf("%s connected", dev.Name))
 		store.SetOnline(dev.ID, true)
-		rm.console.ApplyStatus(dev, "Online")
+		rm.console.SetStatus(dev, "Online")
 
 		// Heartbeat loop
 		for store.IsEnabled(dev.ID) && ble.Ready() {
@@ -93,10 +93,10 @@ func (rm *RuntimeManager) manageDevice(store *DeviceStore, dev *Device) {
 		ble.Disconnect()
 		store.SetOnline(dev.ID, false)
 		store.ClearBLE(dev.ID)
-		rm.console.ApplyStatus(dev, "Offline")
+		rm.console.SetStatus(dev, "Offline")
 
 		if !store.IsEnabled(dev.ID) {
-			rm.console.ApplyStatus(dev, "Disabled")
+			rm.console.SetStatus(dev, "Disabled")
 			return
 		}
 	}
