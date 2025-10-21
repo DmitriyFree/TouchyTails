@@ -9,25 +9,25 @@
 
 // Hardware pins
 #define MOTOR_PIN    2
-#define LED_PIN      13   // onboard indicator LED (blue status LED, inverted idle)
+#define LED_PIN      13   // onboard blue status LED
 #define BUZZER_PIN   3
 #define RGB_PIN      8    // WS2812 / NeoPixel
 #define NUM_LEDS     1
 
-// ==== BLE Elements ==== 
-NimBLEServer* pServer; 
-NimBLEService* pService; 
+// ==== BLE Elements ====
+NimBLEServer* pServer;
+NimBLEService* pService;
 NimBLECharacteristic* pCharacteristic;
 
 // Timing (ms)
-const unsigned long DURATION_LIMIT = 500;   // stop output if no updates
-const unsigned long WATCHDOG_LIMIT = 5000;  // reboot if no messages
+const unsigned long DURATION_LIMIT = 500;
+const unsigned long WATCHDOG_LIMIT = 5000;
 
 // ==== STATE ====
 Adafruit_NeoPixel strip(NUM_LEDS, RGB_PIN, NEO_GRB + NEO_KHZ800);
 
-float currentValue = 0.0;      // current output value [0..1]
-unsigned long lastUpdate = 0;  // last valid BLE update
+float currentValue = 0.0;
+unsigned long lastUpdate = 0;
 
 // ==== LED STATE ====
 enum ConnState { DISCONNECTED, CONNECTED };
@@ -45,10 +45,11 @@ uint16_t rainbowOffset = 0;
 unsigned long lastRainbowUpdate = 0;
 
 // ==== TIMING ====
-#define DISCONNECT_BLINK_INTERVAL 250   // ms
-#define PING_FLASH_DURATION       50    // ms
+#define PING_FLASH_DURATION       80    // ms
 #define RAINBOW_INTERVAL          30    // ms
 #define HAPTIC_FLICKER_INTERVAL   30    // ms
+#define BREATH_INTERVAL           15    // ms (controls breathing update rate)
+#define BREATH_PERIOD             3000  // ms for one full breath cycle
 
 // ==== FUNCTIONS ====
 void setStatusConnected() {
@@ -89,24 +90,15 @@ uint32_t Wheel(byte WheelPos) {
 
 // ==== HELPERS ====
 void applyOutput(float value) {
-  // PWM duty cycle 0–255
   int duty = (int)(value * 255.0);
   analogWrite(MOTOR_PIN, duty);
 
-  // Frequency 0–1000 Hz
   int freq = (int)(value * 1000.0);
-  if (freq > 0) {
-    tone(BUZZER_PIN, freq);
-  } else {
-    noTone(BUZZER_PIN);
-  }
+  if (freq > 0) tone(BUZZER_PIN, freq);
+  else noTone(BUZZER_PIN);
 
-  // update LED overlay
-  if (value > 0) {
-    hapticActive((int)(value * 200)); // map output to LED intensity
-  } else {
-    hapticStop();
-  }
+  if (value > 0) hapticActive((int)(value * 200));
+  else hapticStop();
 }
 
 void resetRGB() {
@@ -118,7 +110,7 @@ void resetRGB() {
 // ==== BLE Event ====
 void handleData(const String& data) {
   float value = data.toFloat();
-  if (value < 0) return; // ignore negatives
+  if (value < 0) return;
   currentValue = constrain(value, 0, 1.0);
   lastUpdate = millis();
   applyOutput(currentValue);
@@ -132,7 +124,7 @@ class CharacteristicCallbacks : public NimBLECharacteristicCallbacks {
     String received(value.c_str());
     Serial.println("From BLE: " + received);
 
-    if (received == "PING") {    // <<< allow external ping command
+    if (received == "ping") {
       pingFlash();
       return;
     }
@@ -140,12 +132,15 @@ class CharacteristicCallbacks : public NimBLECharacteristicCallbacks {
   }
 } chrCallbacks;
 
-class ServerCallbacks : public NimBLEServerCallbacks {  // <<< connection state
+class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override {
     setStatusConnected();
   }
   void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override {
     setStatusDisconnected();
+    //reboot
+    Serial.println("Disconnected! Rebooting...");
+    ESP.restart();
   }
 };
 
@@ -154,7 +149,7 @@ void initBLE() {
   NimBLEDevice::init(DEVICE_NAME);
 
   pServer = NimBLEDevice::createServer();
-  pServer->setCallbacks(new ServerCallbacks()); // <<<
+  pServer->setCallbacks(new ServerCallbacks());
 
   pService = pServer->createService(SERVICE_UUID);
   pCharacteristic = pService->createCharacteristic(
@@ -187,7 +182,7 @@ void initPins(){
   pinMode(BUZZER_PIN, OUTPUT);
 
   digitalWrite(MOTOR_PIN, LOW);
-  digitalWrite(LED_PIN, LOW); // inverted idle
+  analogWrite(LED_PIN, 0);
 }
 
 // ==== LED UPDATE ====
@@ -195,24 +190,41 @@ void updateLEDs() {
   unsigned long now = millis();
 
   // --- Blue status LED ---
+  static unsigned long lastBreathUpdate = 0;
+  static float breathPhase = 0.0;
+
   if (connState == DISCONNECTED) {
-    if ((now / DISCONNECT_BLINK_INTERVAL) % 2 == 0) {
-      digitalWrite(LED_PIN, HIGH);
-    } else {
-      digitalWrite(LED_PIN, LOW);
+    // Breathing effect between 10% and 30%
+    if (now - lastBreathUpdate > BREATH_INTERVAL) {
+      lastBreathUpdate = now;
+      breathPhase += (2.0 * PI / BREATH_PERIOD) * BREATH_INTERVAL;
+      if (breathPhase > 2 * PI) breathPhase -= 2 * PI;
+      float breath = (sin(breathPhase) + 1.0) / 2.0; // 0..1
+      int brightness = 25 + (int)(breath * 26); // range ~10%–30%
+      analogWrite(LED_PIN, brightness);
     }
   } else {
-    digitalWrite(LED_PIN, HIGH);
+    // Connected: LED off, unless ping flash
     if (pingFlashActive) {
       if (now - lastPingFlash < PING_FLASH_DURATION) {
-        digitalWrite(LED_PIN, LOW);
+        analogWrite(LED_PIN, 200); // bright flash
       } else {
         pingFlashActive = false;
+        analogWrite(LED_PIN, 0);
       }
+    } else {
+      analogWrite(LED_PIN, 0);
     }
   }
 
   // --- RGB LED ---
+  if (connState == DISCONNECTED) {
+    strip.clear();
+    strip.show();
+    return;
+  }
+
+  // Connected: normal rainbow + haptic flicker
   uint32_t color = 0;
   if (now - lastRainbowUpdate > RAINBOW_INTERVAL) {
     rainbowOffset++;
@@ -252,19 +264,16 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
-  // 1) auto-zero if inactive
   if (currentValue != 0 && (now - lastUpdate) >= DURATION_LIMIT) {
     currentValue = 0.0;
     applyOutput(currentValue);
   }
 
-  // 2) watchdog reboot
   if (lastUpdate && ((now - lastUpdate) >= WATCHDOG_LIMIT)) {
     Serial.println("No BLE data for too long! Rebooting...");
     ESP.restart();
   }
 
-  // 3) update LEDs
   updateLEDs();
   delay(5);
 }
