@@ -83,10 +83,9 @@ func (rm *RuntimeManager) manageDevice(store *DeviceStore, dev *Device) {
 		store.SetOnline(dev.ID, true)
 		rm.console.SetStatus(dev, "Online")
 
-		// Heartbeat loop
+		// BLEManager pings the device itself and clears Ready() when the link dies
 		for store.IsEnabled(dev.ID) && ble.Ready() {
-			ble.Send("ping")
-			time.Sleep(2 * time.Second)
+			time.Sleep(500 * time.Millisecond)
 		}
 
 		// Disconnect and cleanup
@@ -99,5 +98,8 @@ func (rm *RuntimeManager) manageDevice(store *DeviceStore, dev *Device) {
 			rm.console.SetStatus(dev, "Disabled")
 			return
 		}
+
+		// Give the device time to restart advertising and Windows to drop the old session
+		time.Sleep(2 * time.Second)
 	}
 }

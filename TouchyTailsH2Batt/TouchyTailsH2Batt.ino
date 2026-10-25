@@ -16,13 +16,16 @@
 
 // Timing (ms)
 const unsigned long DURATION_LIMIT = 1000;   // stop output if no updates
-const unsigned long WATCHDOG_LIMIT = 10000;  // reboot if no messages
+const unsigned long WATCHDOG_LIMIT = 10000;  // drop link if host silent
 
 // ==== STATE ====
 Adafruit_NeoPixel strip(NUM_LEDS, RGB_PIN);
 
 float currentValue = 0.0;      // current output value [0..1]
-unsigned long lastUpdate = 0;  // last valid BLE update
+volatile unsigned long lastUpdate = 0;
+volatile unsigned long lastRx = 0;     // any write, incl. ping
+volatile bool linkUp = false;
+volatile uint16_t connHandle = 0;  // last valid BLE update
 
 // ==== BLE Elements ====
 NimBLEServer* pServer;
@@ -64,17 +67,32 @@ class CharacteristicCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
     std::string value = c->getValue();
     if (value.empty()) return;
+    lastRx = millis();
     String received(value.c_str());
     Serial.println("From BLE: " + received);
     handleData(received);
   }
 } chrCallbacks;
 
+class ServerCallbacks : public NimBLEServerCallbacks {
+  void onConnect(NimBLEServer*, NimBLEConnInfo& connInfo) override {
+    connHandle = connInfo.getConnHandle();
+    lastRx = millis();
+    linkUp = true;
+  }
+  void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int) override {
+    linkUp = false;
+    lastUpdate = 0;  // loop() will zero the output on next tick
+    NimBLEDevice::startAdvertising();
+  }
+};
+
 // ==== BLE INIT ====
 void initBLE() {
   NimBLEDevice::init(DEVICE_NAME);
 
   pServer = NimBLEDevice::createServer();
+  pServer->setCallbacks(new ServerCallbacks());
   pService = pServer->createService(SERVICE_UUID);
   pCharacteristic = pService->createCharacteristic(
     CHARACTERISTIC_UUID,
@@ -128,9 +146,10 @@ void loop() {
   }
 
   // 2) watchdog reboot
-  if (lastUpdate && ((now - lastUpdate) >= WATCHDOG_LIMIT)) {
-    Serial.println("No BLE data for too long! Rebooting...");
-    ESP.restart();
+  if (linkUp && (now - lastRx) >= WATCHDOG_LIMIT) {
+    Serial.println("Link silent, dropping connection");
+    lastRx = now;
+    pServer->disconnect(connHandle);
   }
 
   // --- Light sleep until next tick ---

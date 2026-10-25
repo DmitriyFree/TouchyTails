@@ -19,7 +19,9 @@
 
 // Timing
 const unsigned long DURATION_LIMIT = 500;
-const unsigned long WATCHDOG_LIMIT = 3000;
+// Host pings every 2 s. If nothing (data or ping) arrives for this long,
+// drop the link so the host reconnects. Never reboot on idle.
+const unsigned long LINK_TIMEOUT = 6000;
 
 // =========================
 // GLOBALS
@@ -32,13 +34,15 @@ NimBLEServer* pServer;
 NimBLEService* pService;
 NimBLECharacteristic* pCharacteristic;
 
-float currentValue = 0.0;
-unsigned long lastUpdate = 0;
+volatile float currentValue = 0.0;
+volatile unsigned long lastUpdate = 0;   // last haptic value
+volatile unsigned long lastRx = 0;       // last write of any kind (incl. ping)
+volatile uint16_t connHandle = 0;
 bool playing = false;
 unsigned long playStart = 0;
 
 enum ConnState { DISCONNECTED, CONNECTED };
-ConnState connState = DISCONNECTED;
+volatile ConnState connState = DISCONNECTED;
 
 // =========================
 // HAPTIC ENGINE
@@ -48,9 +52,12 @@ class HapticEngine {
 public:
   void begin() {
     if (!drv.begin()) {
-      Serial.println("DRV2605 not found");
-      while (1);
+      // Keep BLE alive so the problem is visible from the host side
+      Serial.println("DRV2605 not found, haptics disabled");
+      ok = false;
+      return;
     }
+    ok = true;
 
     drv.selectLibrary(6);
     drv.setMode(DRV2605_MODE_INTTRIG);
@@ -63,13 +70,15 @@ public:
     randomSeed(analogRead(0));
   }
 
+  bool ok = false;
+
   void setEntropy(float e) {
     entropy = constrain(e, 0.0f, 1.0f);
     active = (entropy > 0.01f);
   }
 
   void update() {
-    if (!active) return;
+    if (!ok || !active) return;
     if (playing) {
       if (millis() - playStart > 20) {  // waveform length safety
         playing = false;
@@ -99,6 +108,8 @@ public:
       lastEvent = now;
     }
   }
+
+  bool isActive() const { return active; }
 
 private:
   float entropy = 0.0f;
@@ -140,8 +151,8 @@ class CharacteristicCallbacks : public NimBLECharacteristicCallbacks {
     std::string value = c->getValue();
     if (value.empty()) return;
 
+    lastRx = millis();
     String received(value.c_str());
-    Serial.println("From BLE: " + received);
 
     if (received == "ping") return;
 
@@ -150,12 +161,18 @@ class CharacteristicCallbacks : public NimBLECharacteristicCallbacks {
 } chrCallbacks;
 
 class ServerCallbacks : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer*, NimBLEConnInfo&) override {
+  void onConnect(NimBLEServer*, NimBLEConnInfo& info) override {
+    connHandle = info.getConnHandle();
+    lastRx = millis();
     connState = CONNECTED;
+    Serial.println("BLE connected");
   }
-  void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int) override {
+  void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int reason) override {
     connState = DISCONNECTED;
-    ESP.restart();
+    currentValue = 0;
+    lastUpdate = 0;
+    Serial.printf("BLE disconnected, reason %d\n", reason);
+    NimBLEDevice::startAdvertising();  // accept the next connection, no reboot
   }
 };
 
@@ -239,8 +256,14 @@ void loop() {
     haptic.setEntropy(0);
   }
 
-  if (lastUpdate && ((now - lastUpdate) >= WATCHDOG_LIMIT)) {
-    ESP.restart();
+  if (currentValue == 0 && haptic.isActive()) {
+    haptic.setEntropy(0);  // value was cleared from the BLE callback
+  }
+
+  if (connState == CONNECTED && (now - lastRx) >= LINK_TIMEOUT) {
+    Serial.println("Link silent, dropping connection");
+    lastRx = now;
+    pServer->disconnect(connHandle);
   }
 
   haptic.update();

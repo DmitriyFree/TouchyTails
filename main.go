@@ -192,9 +192,15 @@ func (gui *GUIState) bleScan() {
 				Enabled: true,
 				Status:  "Pending",
 			}
+			if gui.store.Find(addr) != nil {
+				return // already known; scan reports every advertisement
+			}
 			gui.store.Add(dev)
 			gui.store.Save()
-			gui.loadDevices()
+			// Rebuild UI from the in-memory store. Reloading from disk here replaced
+			// the Device objects and wiped Online/BLEPtr of connected devices, so
+			// OSC stopped reaching them.
+			gui.refreshDevices()
 			gui.window.Invalidate()
 		},
 	)

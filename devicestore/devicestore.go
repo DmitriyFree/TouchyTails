@@ -144,6 +144,8 @@ func (s *DeviceStore) Find(id string) *Device {
 
 // Exists returns true if a device with given ID exists
 func (s *DeviceStore) Exists(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.findUnlocked(id) != nil
 }
 
