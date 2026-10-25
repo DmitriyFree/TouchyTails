@@ -2,6 +2,7 @@ package blemanager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -16,9 +17,10 @@ const (
 	serviceUUIDStr        = "0000ab00-0000-1000-8000-00805f9b34fb"
 	characteristicUUIDStr = "0000ab01-0000-1000-8000-00805f9b34fb"
 
-	pingInterval = 2 * time.Second
-	pingTimeout  = 3 * time.Second
-	minWriteGap  = 20 * time.Millisecond // ~50 writes/s max
+	pingInterval   = 2 * time.Second
+	pingTimeout    = 3 * time.Second
+	minWriteGap    = 20 * time.Millisecond // ~50 writes/s max
+	connectTimeout = 20 * time.Second
 )
 
 // BLEManager owns one device connection.
@@ -84,10 +86,34 @@ func (b *BLEManager) ScanDevice(
 	}()
 }
 
-// ConnectDevice connects to a specific device by its Bluetooth address.
-// On any failure the GATT session is closed, otherwise Windows keeps it alive
-// (MaintainConnection) and later reconnects fail until the app restarts.
-func (b *BLEManager) ConnectDevice(addr string) (err error) {
+// ErrStackTimeout means a WinRT Bluetooth call never returned. The app cannot
+// fix that itself: Windows' Bluetooth stack has to be reset (bt-reset.ps1 or
+// toggling Bluetooth off/on), which is what a PC reboot was doing.
+var ErrStackTimeout = errors.New("Windows Bluetooth did not respond")
+
+// ConnectDevice connects with an overall timeout. WinRT async calls used by
+// tinygo have no timeout of their own, so a wedged stack would otherwise hang
+// this goroutine forever and the device would sit in "Connecting".
+func (b *BLEManager) ConnectDevice(addr string) error {
+	done := make(chan error, 1)
+	go func() { done <- b.connect(addr) }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(connectTimeout):
+		// If the call completes late, release what it opened.
+		go func() {
+			if err := <-done; err == nil {
+				b.Disconnect()
+			}
+		}()
+		return ErrStackTimeout
+	}
+}
+
+// connect does the actual work. On any failure the GATT session is closed,
+// otherwise Windows keeps it alive (MaintainConnection) and later reconnects fail.
+func (b *BLEManager) connect(addr string) (err error) {
 	fmt.Println("Connecting to device at", addr)
 
 	var address bluetooth.Address

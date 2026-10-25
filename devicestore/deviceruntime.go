@@ -2,6 +2,7 @@
 package devicestore
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -65,6 +66,7 @@ func (rm *RuntimeManager) manageDevice(store *DeviceStore, dev *Device) {
 	}()
 
 	rm.console.Log(fmt.Sprintf("Managing device %s (%s)", dev.Name, dev.ID))
+	failures := 0
 
 	for store.IsEnabled(dev.ID) {
 		rm.console.Log(fmt.Sprintf("Connecting to %s...", dev.Name))
@@ -73,12 +75,18 @@ func (rm *RuntimeManager) manageDevice(store *DeviceStore, dev *Device) {
 		store.SetBLE(dev.ID, ble)
 
 		if err := ble.ConnectDevice(dev.ID); err != nil {
+			failures++
 			rm.console.Log(fmt.Sprintf("Failed to connect %s: %v", dev.Name, err))
+			if errors.Is(err, blemanager.ErrStackTimeout) || failures%5 == 0 {
+				rm.console.Log("Bluetooth stack looks stuck: run bt-reset.ps1 or turn Bluetooth off/on in Windows (no reboot needed)")
+				rm.console.SetStatus(dev, "BT stuck")
+			}
 			store.ClearBLE(dev.ID)
 			time.Sleep(5 * time.Second)
 			continue
 		}
 
+		failures = 0
 		rm.console.Log(fmt.Sprintf("%s connected", dev.Name))
 		store.SetOnline(dev.ID, true)
 		rm.console.SetStatus(dev, "Online")
