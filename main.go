@@ -252,6 +252,9 @@ func processOSC(gui *GUIState) {
 }
 
 func mapOSCValue(val float32) float32 {
+	if val == 0 {
+		return 0
+	}
 	mapped := 0.8 + val*0.2
 	if mapped < 0.8 {
 		mapped = 0.8
